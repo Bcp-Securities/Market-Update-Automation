@@ -17,7 +17,7 @@ DB_PATH = BASE_DIR / "market_update.db"
 LOG_DIR = BASE_DIR / "logs"
 
 LOG_DIR.mkdir(exist_ok=True)
-log_file = LOG_DIR / "atualizador_dim_asset.log"
+log_file = LOG_DIR / "atualizador_dim_security.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +29,7 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger("atualizador_dim_asset")
+logger = logging.getLogger("atualizador_dim_security")
 
 def register_new_assets(tickers, db_path=DB_PATH):
     logger.info(f"Cadastrando {len(tickers)} novo(s) ativo(s)...")
@@ -70,12 +70,12 @@ def register_new_assets(tickers, db_path=DB_PATH):
         
         for _, row in df_bdp.iterrows():
             cursor.execute('''
-                INSERT OR IGNORE INTO dim_asset (isin, ticker, coupon, maturity, issue_date, industry_group)
+                INSERT OR IGNORE INTO dim_security (isin, ticker, coupon, maturity, issue_date, industry_group)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (row['isin'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group']))
         
         conn.commit()
-        logger.info("Ativos cadastrados com sucesso na dim_asset.")
+        logger.info("Ativos cadastrados com sucesso na dim_security.")
         
     except Exception as e:
         logger.error(f"Erro no cadastro: {e}", exc_info=True)
@@ -168,8 +168,8 @@ def check_and_register_new_issues(filepath, db_path=DB_PATH):
     # Conecta no banco para ver o que já temos
     conn = sqlite3.connect(db_path)
     try:
-        # Pega a lista de tickers já cadastrados na dim_asset
-        df_db = pd.read_sql("SELECT isin FROM dim_asset", conn)
+        # Pega a lista de tickers já cadastrados na dim_security
+        df_db = pd.read_sql("SELECT isin FROM dim_security", conn)
         tickers_db = set(df_db['isin'].tolist())
         
         tickers_excel_set = set(isins_excel)
@@ -182,14 +182,14 @@ def check_and_register_new_issues(filepath, db_path=DB_PATH):
             logger.info(f"Encontrados: {novos_tickers}")
             register_new_assets(novos_tickers, db_path)
         else:
-            logger.info("Nenhum ativo novo. Todos os bonds do SRCH já estão na dim_asset.")
+            logger.info("Nenhum ativo novo. Todos os bonds do SRCH já estão na dim_security.")
             
     finally:
         conn.close()
 
 def main():
     logger.info("=" * 60)
-    logger.info("INICIANDO ATUALIZAÇÃO AUTOMÁTICADA DIM_ASSET")
+    logger.info("INICIANDO ATUALIZAÇÃO AUTOMÁTICADA dim_security")
     logger.info("=" * 60)
 
     check_and_register_new_issues(EXCEL_FILE)

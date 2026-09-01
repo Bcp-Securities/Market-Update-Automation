@@ -10,7 +10,7 @@ O projeto roda três ETLs independentes, agendados no Windows Task Scheduler, ca
 |---|---|---|---|---|
 | Diário | `market_update.py` | de hora em hora (dias úteis) | Bloomberg (via `xbbg`), FRED | `series_meta` → `time_series` |
 | Mensal | `monthly_update.py` | 1x por dia às 10:00 (dias úteis) | FRBSF (Excel), BCB/SGS (JSON) | `series_meta_monthly` → `time_series_monthly` |
-| Bonds | `update_dim_asset.py`, `update_fact_price.py` |1x por dia às 13:00 (dias úteis) | Bloomberg (via Excel/BSRCH e `xbbg`) | `dim_asset`, `dim_date` → `fact_price` |
+| Bonds | `update_dim_security.py`, `update_fact_pricing.py` |1x por dia às 13:00 (dias úteis) | Bloomberg (via Excel/BSRCH e `xbbg`) | `dim_security`, `dim_date` → `fact_pricing` |
 
 A ideia central do projeto é: **o código não sabe nada sobre séries/ativos específicos — ele só sabe ler metadados/dimensões e executar a fonte correspondente**. Adicionar uma série nova (Bloomberg, FRED, FRBSF ou BCB) é inserir uma linha na tabela de metadados certa; não é preciso alterar os scripts de ETL. Para bonds, o cadastro de novos ativos é automático a partir de uma busca (SRCH) mantida no terminal Bloomberg.
 
@@ -47,7 +47,7 @@ TIME_SERIES_MONTHLY {
     text obs_date
     real value
 }
-DIM_ASSET {
+DIM_SECURITY {
     int asset_id PK
     text isin
     text ticker
@@ -64,7 +64,7 @@ DIM_DATE {
     int quarter
     int day_of_week
 }
-FACT_PRICE {
+FACT_PRICING {
     int asset_id FK
     int date_id FK
     real price_mid
@@ -77,8 +77,8 @@ FACT_PRICE {
 }
 SERIES_META ||--o{ TIME_SERIES : has
 SERIES_META_MONTHLY ||--o{ TIME_SERIES_MONTHLY : has
-DIM_ASSET ||--o{ FACT_PRICE : has
-DIM_DATE ||--o{ FACT_PRICE : has
+DIM_SECURITY ||--o{ FACT_PRICING : has
+DIM_DATE ||--o{ FACT_PRICING : has
 ```
 
 ## Estrutura do banco
@@ -119,7 +119,7 @@ series_code | obs_date | value
 
 Chave primária composta `(series_code, obs_date)`. `time_series` tem granularidade diária; `time_series_monthly` tem granularidade mensal (sempre dia 1 do mês, `YYYY-MM-01`).
 
-### `dim_asset` — cadastro estático dos bonds
+### `dim_security` — cadastro estático dos bonds
 
 Guarda os dados de um bond que **não mudam com o tempo** (ou mudam raramente): cupom, vencimento, data de emissão, setor. Cada linha é um ativo, identificado pelo ISIN.
 
@@ -133,19 +133,19 @@ Guarda os dados de um bond que **não mudam com o tempo** (ou mudam raramente): 
 | `issue_date` | Data de emissão |
 | `industry_group` | Setor/indústria (classificação BICS) |
 
-Populada por `update_dim_asset.py`. Novos ativos entram via `INSERT OR IGNORE` — se um ISIN já cadastrado tiver algum campo alterado na Bloomberg (ex: reclassificação de setor), essa mudança **não é refletida automaticamente**; o registro existente é preservado como estava no primeiro cadastro. Isso é intencional para os campos verdadeiramente estáticos (ISIN, cupom, datas), mas vale ter em mente para `industry_group`, que ocasionalmente é reclassificado pela Bloomberg.
+Populada por `update_dim_security.py`. Novos ativos entram via `INSERT OR IGNORE` — se um ISIN já cadastrado tiver algum campo alterado na Bloomberg (ex: reclassificação de setor), essa mudança **não é refletida automaticamente**; o registro existente é preservado como estava no primeiro cadastro. Isso é intencional para os campos verdadeiramente estáticos (ISIN, cupom, datas), mas vale ter em mente para `industry_group`, que ocasionalmente é reclassificado pela Bloomberg.
 
 ### `dim_date` — calendário
 
-Uma linha por data de referência já usada em `fact_price`, com atributos derivados (ano, mês, trimestre, dia da semana) para facilitar agregações. Populada automaticamente pelo `update_fact_price.py` conforme necessário.
+Uma linha por data de referência já usada em `fact_pricing`, com atributos derivados (ano, mês, trimestre, dia da semana) para facilitar agregações. Populada automaticamente pelo `update_fact_pricing.py` conforme necessário.
 
-### `fact_price` — dados de mercado dos bonds, atualizados semanalmente
+### `fact_pricing` — dados de mercado dos bonds, atualizados semanalmente
 
 Guarda o que muda com o tempo: preço, yield, duration, rating e quantidade em aberto, uma linha por ativo por data de referência.
 
 | Coluna | Significado |
 |---|---|
-| `asset_id` | FK para `dim_asset` |
+| `asset_id` | FK para `dim_security` |
 | `date_id` | FK para `dim_date` |
 | `price_mid` | Preço mid |
 | `yield_mid` | Yield to maturity mid |
@@ -173,31 +173,31 @@ Chave primária composta `(asset_id, date_id)`.
 4. Grava com `INSERT ... ON CONFLICT DO UPDATE` em `time_series_monthly` — diferente do diário, aqui o **último ponto é sempre reenviado e sobrescrito**, porque CPI e IPCA sofrem revisão retroativa com frequência.
 5. Falha em uma série não interrompe as demais (loga e continua).
 
-### Bonds — `update_dim_asset.py` + `update_fact_price.py`
+### Bonds — `update_dim_security.py` + `update_fact_pricing.py`
 
-O fluxo é em duas etapas, cadastro seguido de cotação, porque `fact_price` depende de `dim_asset` já ter o ativo (FK).
+O fluxo é em duas etapas, cadastro seguido de cotação, porque `fact_pricing` depende de `dim_security` já ter o ativo (FK).
 
-**1. `update_dim_asset.py`** — descoberta e cadastro de novos ativos:
+**1. `update_dim_security.py`** — descoberta e cadastro de novos ativos:
 
 1. Abre `new_issues.xlsx` de forma invisível via `win32com` (Excel Automation) e força o recálculo. A célula A1 contém a fórmula BSRCH do add-in Bloomberg, apontando para uma busca (SRCH) salva no terminal; ao recalcular, a coluna A se preenche com os ISINs encontrados, com "id" como cabeçalho.
    > Nota: BSRCH via `xbbg` não funcionou de forma confiável para o SRCH usado neste projeto — por isso o acesso é feito via automação do Excel/add-in em vez da biblioteca Python.
 2. Faz polling na célula A1 (até ~30 tentativas, 1s cada) esperando a Bloomberg responder, e lê a coluna A até encontrar uma célula vazia, coletando a lista de ISINs.
-3. Compara essa lista com os ISINs já existentes em `dim_asset` e identifica os novos.
-4. Para os ISINs novos, busca campos estáticos na Bloomberg (`blp.bdp`) e insere em `dim_asset` via `INSERT OR IGNORE`.
+3. Compara essa lista com os ISINs já existentes em `dim_security` e identifica os novos.
+4. Para os ISINs novos, busca campos estáticos na Bloomberg (`blp.bdp`) e insere em `dim_security` via `INSERT OR IGNORE`.
 
-**2. `update_fact_price.py`** — atualização semanal das cotações:
+**2. `update_fact_pricing.py`** — atualização semanal das cotações:
 
 1. `checar_atualizar` ancora a atualização sempre numa segunda-feira: se rodar em outro dia da semana, recua para a segunda-feira mais recente antes de checar/buscar dados. Isso assume que toda segunda-feira tem pregão; se cair em feriado, o comportamento não é validado automaticamente.
-2. Se `fact_price` já tem registro para essa `date_id`, não faz nada.
-3. Caso contrário, busca todos os ISINs cadastrados em `dim_asset`, puxa campos estáticos-mas-variáveis (`AMT_OUTSTANDING`, ratings, duration) via `blp.bdp` e preço/yield do dia via `blp.bdh`.
-4. Faz o upsert em `fact_price` via uma tabela de staging (`fact_price_temp`, recriada a cada execução) seguida de `INSERT OR REPLACE` a partir dela.
+2. Se `fact_pricing` já tem registro para essa `date_id`, não faz nada.
+3. Caso contrário, busca todos os ISINs cadastrados em `dim_security`, puxa campos estáticos-mas-variáveis (`AMT_OUTSTANDING`, ratings, duration) via `blp.bdp` e preço/yield do dia via `blp.bdh`.
+4. Faz o upsert em `fact_pricing` via uma tabela de staging (`fact_pricing_temp`, recriada a cada execução) seguida de `INSERT OR REPLACE` a partir dela.
 
 ## Adicionando uma série ou ativo novo
 
 - **Bloomberg/FRED (diário)**: inserir uma linha em `series_meta` com `source`, `ticker` e (se BBG) `bbg_field`. Se o `bbg_field` for novo, adicionar o mapeamento correspondente em `MAPEAMENTO_BBG` no `market_update.py`.
 - **FRBSF/BCB (mensal)**: inserir uma linha em `series_meta_monthly` (via `seed_series_meta_monthly.py`) com `source`, e `ticker` (BCB) ou `value_field` (FRBSF).
 - **Fonte totalmente nova (mensal)**: escrever um novo fetcher em `monthly_update.py` com a assinatura `(meta_row: dict) -> DataFrame[series_code, obs_date, value]` e registrá-lo no dicionário `FETCHERS`.
-- **Bonds novos**: não precisa de ação manual — basta o ativo aparecer no resultado do SRCH configurado no terminal Bloomberg. O `update_dim_asset.py` detecta e cadastra automaticamente na próxima execução semanal.
+- **Bonds novos**: não precisa de ação manual — basta o ativo aparecer no resultado do SRCH configurado no terminal Bloomberg. O `update_dim_security.py` detecta e cadastra automaticamente na próxima execução semanal.
 
 ## Automação (Windows Task Scheduler)
 
@@ -209,13 +209,13 @@ Três `.bat` independentes, cada um com seu próprio lockfile (evita execução 
 | Mensal | `run_monthly.bat` | 1x por dia | `run_monthly_update.lock` | `logs/run_bat_monthly.log` |
 | Bonds | `run_fact_update.bat` | 1x por dia | `run_fact_update.lock` | `logs/run_fact_update.log` |
 
-As três tarefas são independentes entre si — uma falhar não afeta as outras. Cada script Python também mantém seu próprio log detalhado em `logs/` (`atualizador_dados.log`, `atualizador_dados_mensais.log`, `atualizador_dim_asset.log`, `atualizador_fact_price.log`).
+As três tarefas são independentes entre si — uma falhar não afeta as outras. Cada script Python também mantém seu próprio log detalhado em `logs/` (`atualizador_dados.log`, `atualizador_dados_mensais.log`, `atualizador_dim_security.log`, `atualizador_fact_pricing.log`).
 
-No `.bat` de bonds, os dois scripts rodam em sequência e cada etapa aborta a execução (mantendo o lockfile removido, mas retornando erro) se a etapa anterior falhar — isso evita rodar `update_fact_price.py` caso `update_dim_asset.py` não tenha conseguido cadastrar ativos novos corretamente.
+No `.bat` de bonds, os dois scripts rodam em sequência e cada etapa aborta a execução (mantendo o lockfile removido, mas retornando erro) se a etapa anterior falhar — isso evita rodar `update_fact_pricing.py` caso `update_dim_security.py` não tenha conseguido cadastrar ativos novos corretamente.
 
 ## Observações importantes
 
-- Todos os ETLs são **idempotentes**: rodar de novo não duplica dados. O diário ignora datas já existentes; o mensal sobrescreve o último ponto (por causa de revisões) mas não duplica linhas; o de bonds ignora ISINs já cadastrados em `dim_asset` e faz upsert em `fact_price` por `(asset_id, date_id)`.
+- Todos os ETLs são **idempotentes**: rodar de novo não duplica dados. O diário ignora datas já existentes; o mensal sobrescreve o último ponto (por causa de revisões) mas não duplica linhas; o de bonds ignora ISINs já cadastrados em `dim_security` e faz upsert em `fact_pricing` por `(asset_id, date_id)`.
 - O schema inteiro (todas as tabelas) é criado via `CREATE TABLE IF NOT EXISTS`, então rodar o script de criação de novo nunca apaga dados existentes.
-- Os metadados (`series_meta`, `series_meta_monthly`) e a dimensão de ativos (`dim_asset`, alimentada pelo SRCH da Bloomberg) são a única coisa que precisa ser mantida/observada no dia a dia — os scripts de ETL raramente precisam mudar.
+- Os metadados (`series_meta`, `series_meta_monthly`) e a dimensão de ativos (`dim_security`, alimentada pelo SRCH da Bloomberg) são a única coisa que precisa ser mantida/observada no dia a dia — os scripts de ETL raramente precisam mudar.
 - O bloco de bonds depende de dois recursos externos ao banco: o arquivo `new_issues.xlsx` (com a fórmula BSRCH) e o SRCH salvo no terminal Bloomberg. Se o SRCH for alterado ou removido no terminal, o cadastro de novos ativos para de funcionar silenciosamente (a função retorna lista vazia e o ETL simplesmente não encontra nada novo).

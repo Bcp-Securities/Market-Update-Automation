@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS series_meta_monthly (
     updated_at  TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS dim_asset (
+CREATE TABLE IF NOT EXISTS dim_security (
     asset_id INTEGER PRIMARY KEY AUTOINCREMENT,
     isin TEXT UNIQUE,
     ticker TEXT,
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS time_series_monthly (
 );
 CREATE INDEX IF NOT EXISTS ix_ts_monthly_date ON time_series_monthly(obs_date);
 
-CREATE TABLE IF NOT EXISTS fact_price (
+CREATE TABLE IF NOT EXISTS fact_pricing (
     asset_id INTEGER,
     date_id INTEGER,
     price_mid REAL,
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS fact_price (
     rating_sp TEXT,
     rating_fitch TEXT,
     PRIMARY KEY (asset_id, date_id),
-    FOREIGN KEY (asset_id) REFERENCES dim_asset(asset_id),
+    FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
 );
 """

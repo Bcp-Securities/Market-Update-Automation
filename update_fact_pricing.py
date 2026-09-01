@@ -13,7 +13,7 @@ DB_PATH = BASE_DIR / "market_update.db"
 LOG_DIR = BASE_DIR / "logs"
 
 LOG_DIR.mkdir(exist_ok=True)
-log_file = LOG_DIR / "atualizador_fact_price.log"
+log_file = LOG_DIR / "atualizador_fact_pricing.log"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,18 +25,18 @@ logging.basicConfig(
     ]
 )
 
-logger = logging.getLogger("atualizador_fact_price")
+logger = logging.getLogger("atualizador_fact_pricing")
 
-def update_fact_prices(reference_date, db_path=DB_PATH):
+def update_fact_pricings(reference_date, db_path=DB_PATH):
     logger.info(f"Iniciando atualização de cotações para {reference_date}...")
     
     try:
         conn = sqlite3.connect(db_path)
         
         # 1. Busca os ativos cadastrados
-        df_assets = pd.read_sql("SELECT asset_id, isin FROM dim_asset", conn)
+        df_assets = pd.read_sql("SELECT asset_id, isin FROM dim_security", conn)
         if df_assets.empty:
-            logger.warning("Nenhum ativo encontrado na dim_asset. Abortando.")
+            logger.warning("Nenhum ativo encontrado na dim_security. Abortando.")
             return
             
         tickers = df_assets['isin'].tolist()
@@ -105,14 +105,14 @@ def update_fact_prices(reference_date, db_path=DB_PATH):
                      'amt_outstanding', 'rating_moody', 'rating_sp', 'rating_fitch']
         
         # A magia do UPSERT rápido:
-        df_fact[cols_fato].to_sql('fact_price_temp', conn, if_exists='replace', index=False)
+        df_fact[cols_fato].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
         cursor.execute('''
-            INSERT OR REPLACE INTO fact_price 
+            INSERT OR REPLACE INTO fact_pricing 
             (asset_id, date_id, price_mid, yield_mid, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch)
             SELECT asset_id, date_id, price_mid, yield_mid, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch
-            FROM fact_price_temp
+            FROM fact_pricing_temp
         ''')
-        cursor.execute('DROP TABLE fact_price_temp')
+        cursor.execute('DROP TABLE fact_pricing_temp')
         conn.commit()
         
         logger.info("Fato atualizada com sucesso.")
@@ -137,14 +137,14 @@ def checar_atualizar(hoje):
     conn = sqlite3.connect(DB_PATH)
     try:
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM fact_price WHERE date_id = ?", (int(hoje.strftime('%Y%m%d')),))
+        cursor.execute("SELECT COUNT(*) FROM fact_pricing WHERE date_id = ?", (int(hoje.strftime('%Y%m%d')),))
         count = cursor.fetchone()[0]
         
         if count > 0:
             logger.info(f"Fato já atualizada para {hoje}. Nenhuma ação necessária.")
         else:
             logger.info(f"Fato não encontrada para {hoje}. Iniciando atualização...")
-            update_fact_prices(hoje.strftime('%Y-%m-%d'), db_path=DB_PATH)
+            update_fact_pricings(hoje.strftime('%Y-%m-%d'), db_path=DB_PATH)
             
     except Exception as e:
         logger.error(f"Erro ao checar/atualizar fato: {e}", exc_info=True)
@@ -153,14 +153,14 @@ def checar_atualizar(hoje):
 
 def main():
     logger.info("=" * 60)
-    logger.info("INICIANDO ATUALIZAÇÃO AUTOMÁTICA DA FACT_PRICE")
+    logger.info("INICIANDO ATUALIZAÇÃO AUTOMÁTICA DA fact_pricing")
     logger.info("=" * 60)
 
     hoje = datetime.now().date()
     checar_atualizar(hoje)
 
     logger.info("=" * 60)
-    logger.info("ATUALIZAÇÃO DA FACT_PRICE CONCLUÍDA")
+    logger.info("ATUALIZAÇÃO DA fact_pricing CONCLUÍDA")
     logger.info("=" * 60)
 
 if __name__ == "__main__":
