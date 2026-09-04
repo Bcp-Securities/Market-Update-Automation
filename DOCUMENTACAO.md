@@ -10,7 +10,7 @@ O projeto roda três ETLs independentes, agendados no Windows Task Scheduler, ca
 |---|---|---|---|---|
 | Diário | `market_update.py` | de hora em hora (dias úteis) | Bloomberg (via `xbbg`), FRED | `series_meta` → `time_series` |
 | Mensal | `monthly_update.py` | 1x por dia às 10:00 (dias úteis) | FRBSF (Excel), BCB/SGS (JSON) | `series_meta_monthly` → `time_series_monthly` |
-| Bonds | `update_dim_security.py`, `update_fact_pricing.py` |1x por dia às 13:00 (dias úteis) | Bloomberg (via Excel/BSRCH e `xbbg`) | `dim_security`, `dim_date` → `fact_pricing` |
+| Bonds | `update_dim_security.py`, `update_fact_pricing.py` | de hora em hora (terça a sexta) | Bloomberg (via Excel/BSRCH e `xbbg`) | `dim_security`, `dim_date` → `fact_pricing` |
 
 A ideia central do projeto é: **o código não sabe nada sobre séries/ativos específicos — ele só sabe ler metadados/dimensões e executar a fonte correspondente**. Adicionar uma série nova (Bloomberg, FRED, FRBSF ou BCB) é inserir uma linha na tabela de metadados certa; não é preciso alterar os scripts de ETL. Para bonds, o cadastro de novos ativos é automático a partir de uma busca (SRCH) mantida no terminal Bloomberg.
 
@@ -69,6 +69,11 @@ FACT_PRICING {
     int date_id FK
     real price_mid
     real yield_mid
+}
+FACT_BDP {
+    int asset_id FK
+    int date_id FK
+    text collected_at
     real duration_mid
     real amt_outstanding
     text rating_moody
@@ -78,7 +83,9 @@ FACT_PRICING {
 SERIES_META ||--o{ TIME_SERIES : has
 SERIES_META_MONTHLY ||--o{ TIME_SERIES_MONTHLY : has
 DIM_SECURITY ||--o{ FACT_PRICING : has
+DIM_SECURITY ||--o{ FACT_BDP : has
 DIM_DATE ||--o{ FACT_PRICING : has
+DIM_DATE ||--o{ FACT_BDP : has
 ```
 
 ## Estrutura do banco
@@ -139,21 +146,37 @@ Populada por `update_dim_security.py`. Novos ativos entram via `INSERT OR IGNORE
 
 Uma linha por data de referência já usada em `fact_pricing`, com atributos derivados (ano, mês, trimestre, dia da semana) para facilitar agregações. Populada automaticamente pelo `update_fact_pricing.py` conforme necessário.
 
-### `fact_pricing` — dados de mercado dos bonds, atualizados semanalmente
+### `fact_pricing` e `fact_bdp` — dados de mercado dos bonds
 
-Guarda o que muda com o tempo: preço, yield, duration, rating e quantidade em aberto, uma linha por ativo por data de referência.
+Os dados dinâmicos dos bonds são divididos em duas tabelas de fatos para separar cotações de fechamento (históricas) de atributos que sofrem alterações esporádicas (snapshots):
+
+#### `fact_pricing` (Atualização via BDH)
+
+Guarda as cotações de fechamento (série temporal) ancoradas sempre na segunda-feira da semana de referência.
 
 | Coluna | Significado |
 |---|---|
-| `asset_id` | FK para `dim_security` |
-| `date_id` | FK para `dim_date` |
-| `price_mid` | Preço mid |
-| `yield_mid` | Yield to maturity mid |
-| `duration_mid` | Duration mid |
-| `amt_outstanding` | Montante em aberto (em milhões) |
-| `rating_moody`, `rating_sp`, `rating_fitch` | Ratings das três agências |
+| `asset_id` | FK para dim_security |
+| `date_id` | FK para dim_date (Sempre aponta para uma segunda-feira) |
+| `price_mid` | Preço mid de fechamento |
+| `yield_mid` | Yield to maturity mid de fechamento |
 
-Chave primária composta `(asset_id, date_id)`.
+Chave primária composta (asset_id, date_id).
+
+#### `fact_bdp` (Atualização via BDP)
+
+Guarda o "snapshot" (foto do momento da coleta) de atributos estáticos-mas-variáveis dos bonds.
+
+| Coluna | Significado |
+|---|---|
+| `asset_id` | FK para dim_security
+| `date_id` | FK para dim_date (Data real do dia em que a coleta foi feita)
+| `collected_at` | Timestamp exato da coleta (Ex: 2026-09-04 10:35:00)
+| `duration_mid` | Duration mid atual
+| `amt_outstanding` | Montante em aberto (em milhões)
+| `rating_moody, rating_sp, rating_fitch` | Ratings atuais das três agências
+
+Chave primária composta (asset_id, date_id).
 
 ## Como cada ETL decide o que buscar
 
@@ -175,7 +198,7 @@ Chave primária composta `(asset_id, date_id)`.
 
 ### Bonds — `update_dim_security.py` + `update_fact_pricing.py`
 
-O fluxo é em duas etapas, cadastro seguido de cotação, porque `fact_pricing` depende de `dim_security` já ter o ativo (FK).
+O fluxo é em duas etapas, cadastro seguido de cotação, porque `fact_pricing` e `fact_bdp` dependem de `dim_security` já ter o ativo (FK).
 
 **1. `update_dim_security.py`** — descoberta e cadastro de novos ativos:
 
@@ -185,12 +208,25 @@ O fluxo é em duas etapas, cadastro seguido de cotação, porque `fact_pricing` 
 3. Compara essa lista com os ISINs já existentes em `dim_security` e identifica os novos.
 4. Para os ISINs novos, busca campos estáticos na Bloomberg (`blp.bdp`) e insere em `dim_security` via `INSERT OR IGNORE`.
 
-**2. `update_fact_pricing.py`** — atualização semanal das cotações:
+**2. `update_fact_pricing.py`** —  atualização semanal das cotações e atributos:
 
-1. `checar_atualizar` ancora a atualização sempre numa segunda-feira: se rodar em outro dia da semana, recua para a segunda-feira mais recente antes de checar/buscar dados. Isso assume que toda segunda-feira tem pregão; se cair em feriado, o comportamento não é validado automaticamente.
-2. Se `fact_pricing` já tem registro para essa `date_id`, não faz nada.
-3. Caso contrário, busca todos os ISINs cadastrados em `dim_security`, puxa campos estáticos-mas-variáveis (`AMT_OUTSTANDING`, ratings, duration) via `blp.bdp` e preço/yield do dia via `blp.bdh`.
-4. Faz o upsert em `fact_pricing` via uma tabela de staging (`fact_pricing_temp`, recriada a cada execução) seguida de `INSERT OR REPLACE` a partir dela.
+Este script trata `fact_pricing` (BDH) e `fact_bdp` (BDP) como duas atualizações independentes, ambas rodando uma vez por semana (embora o script seja acionado de hora em hora de terça a sexta):
+
+1. `fact_pricing` (Cotações via BDH):
+
+- Ancora a atualização sempre na segunda-feira da semana corrente.
+- Se já existe registro em `fact_pricing` para a date_id dessa segunda-feira, a etapa é pulada.
+- Caso contrário, usa uma pequena amostra de ativos para verificar se houve pregão na segunda-feira. Se foi feriado (sem dados), recua automaticamente até 5 dias úteis para encontrar o fechamento válido mais recente.
+- Busca preço/yield para todos os ISINs da dim_security e grava o resultado sob o date_id da segunda-feira (mesmo que o dado real tenha vindo do fallback de sexta).
+
+2. `fact_bdp` (Snapshot via BDP):
+- Realiza uma checagem semanal por janela: verifica se já existe algum registro na tabela `fact_bdp` com um date_id pertencente à semana atual (entre segunda e domingo).
+- Se já existir, a coleta é pulada (economizando chamadas à API da Bloomberg).
+- Se não existir (primeira execução bem-sucedida da semana), faz um snapshot instantâneo (blp.bdp) de duration, amount outstanding e ratings para todos os bonds.
+- Os dados são salvos usando a data real do dia da execução (date_id_hoje) e o horário exato da coleta (collected_at), desvinculando-se do fallback de feriados do BDH.
+
+3. Gravação Segura: Ambas as inserções utilizam tabelas de staging temporárias (`fact_pricing_temp`, `fact_bdp_temp`) seguidas de um INSERT OR REPLACE, garantindo transações limpas e mantendo o processo idempotente.
+
 
 ## Adicionando uma série ou ativo novo
 
