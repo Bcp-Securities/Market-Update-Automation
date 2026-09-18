@@ -23,12 +23,22 @@ CREATE TABLE IF NOT EXISTS series_meta_monthly (
 );
 CREATE TABLE IF NOT EXISTS dim_security (
     asset_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    isin TEXT UNIQUE,
+    bbg_id TEXT UNIQUE,
+    bbg_id_regs TEXT,
+    bbg_id_144a TEXT,
+    isin TEXT,
     ticker TEXT,
     coupon REAL,
     maturity DATE,
     issue_date DATE,
-    industry_group TEXT
+    industry_group TEXT,
+    cntry_of_risk TEXT,
+    issuer TEXT,
+    currency TEXT,
+    collateral TEXT,
+    amt_issuance REAL,
+    min_piece REAL,
+    flag_inactive INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS dim_date (
     date_id INTEGER PRIMARY KEY,
@@ -68,7 +78,7 @@ CREATE TABLE IF NOT EXISTS fact_pricing (
     asset_id  INTEGER NOT NULL,
     date_id   INTEGER NOT NULL,
     price_mid REAL,
-    yield_mid REAL,
+    ytm_mid REAL,
     PRIMARY KEY (asset_id, date_id),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
@@ -89,6 +99,11 @@ CREATE TABLE IF NOT EXISTS fact_bdp (
     rating_moody    TEXT,
     rating_sp       TEXT,
     rating_fitch    TEXT,
+    bb_composite    TEXT,
+    next_call_dt    DATE,
+    next_call_yield REAL,
+    next_call_price REAL,
+    z_spread        REAL,
     PRIMARY KEY (asset_id, date_id),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)

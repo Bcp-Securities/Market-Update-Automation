@@ -141,25 +141,47 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
             df_bdh[col] = None
         df_bdh[col] = pd.to_numeric(df_bdh[col], errors='coerce')
 
+    tickers_solicitados = set(tickers)
+    tickers_retornados = set(df_bdh['ticker'].unique())
+
+    tickers_faltantes = sorted(
+        tickers_solicitados - tickers_retornados
+    )
+
+    logger.info(
+        f"[BDH] Solicitados: {len(tickers_solicitados)} | "
+        f"Retornados: {len(tickers_retornados)} | "
+        f"Faltantes: {len(tickers_faltantes)}"
+    )
+
+    if tickers_faltantes:
+        logger.warning(
+            f"[BDH] {len(tickers_faltantes)} ticker(s) não retornaram da Bloomberg:"
+        )
+
+        for ticker in tickers_faltantes:
+            logger.warning(f"    {ticker}")
+
+
     df_bdh.rename(columns={
-        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'yield_mid', 'ticker': 'isin'
+        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id'
     }, inplace=True)
 
-    df_assets = pd.read_sql("SELECT asset_id, isin FROM dim_security", conn)
-    df_fact = df_bdh.merge(df_assets, on='isin', how='inner')
+    df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+    df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
     df_fact['date_id'] = date_id
 
     n_sem_match = len(df_bdh) - len(df_fact)
     if n_sem_match > 0:
         logger.warning(f"[BDH] {n_sem_match} ticker(s) retornado(s) pela Bloomberg nao encontrados em dim_security.")
 
-    cols = ['asset_id', 'date_id', 'price_mid', 'yield_mid']
+    cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid']
     df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
 
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, yield_mid)
-        SELECT asset_id, date_id, price_mid, yield_mid FROM fact_pricing_temp
+        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid)
+        SELECT asset_id, date_id, price_mid, ytm_mid FROM fact_pricing_temp
     ''')
     cursor.execute('DROP TABLE fact_pricing_temp')
     conn.commit()
@@ -175,7 +197,7 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
 def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
     logger.info(f"[BDP] Buscando atributos semanais para {len(tickers)} ticker(s)...")
 
-    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID']
+    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX', 'z_sprd_mid']
     df_bdp = blp.bdp(tickers, flds=campos_bdp)
 
     if df_bdp.empty:
@@ -191,16 +213,20 @@ def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
         if col not in df_bdp.columns:
             df_bdp[col] = None
 
-    df_bdp['AMT_OUTSTANDING'] = pd.to_numeric(df_bdp['AMT_OUTSTANDING'], errors='coerce') / 1_000_000
+    df_bdp['AMT_OUTSTANDING'] = pd.to_numeric(df_bdp['AMT_OUTSTANDING'], errors='coerce')
     df_bdp['MTY_DUR_MID'] = pd.to_numeric(df_bdp['MTY_DUR_MID'], errors='coerce')
+    df_bdp['YLD_YTC_MID'] = pd.to_numeric(df_bdp['YLD_YTC_MID'], errors='coerce')
+    df_bdp['NXT_CALL_PX'] = pd.to_numeric(df_bdp['NXT_CALL_PX'], errors='coerce')
+    df_bdp['z_sprd_mid'] = pd.to_numeric(df_bdp['z_sprd_mid'], errors='coerce')
 
     df_bdp.rename(columns={
-        'ticker': 'isin', 'AMT_OUTSTANDING': 'amt_outstanding', 'MTY_DUR_MID': 'duration_mid',
-        'RTG_MOODY': 'rating_moody', 'RTG_SP_LONG': 'rating_sp', 'RTG_FITCH': 'rating_fitch',
+        'ticker': 'bbg_id', 'AMT_OUTSTANDING': 'amt_outstanding', 'MTY_DUR_MID': 'duration_mid',
+        'RTG_MOODY': 'rating_moody', 'RTG_SP_LONG': 'rating_sp', 'RTG_FITCH': 'rating_fitch', 'BB_COMPOSITE': 'bb_composite',
+        'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price', 'z_sprd_mid': 'z_spread'
     }, inplace=True)
 
-    df_assets = pd.read_sql("SELECT asset_id, isin FROM dim_security", conn)
-    df_fact = df_bdp.merge(df_assets, on='isin', how='inner')
+    df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+    df_fact = df_bdp.merge(df_assets, on='bbg_id', how='inner')
     df_fact['date_id'] = date_id
     df_fact['collected_at'] = collected_at
 
@@ -209,14 +235,14 @@ def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
         logger.warning(f"[BDP] {n_sem_match} ticker(s) retornado(s) pela Bloomberg nao encontrados em dim_security.")
 
     cols = ['asset_id', 'date_id', 'collected_at', 'duration_mid', 'amt_outstanding',
-            'rating_moody', 'rating_sp', 'rating_fitch']
+            'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price', 'z_spread']
     df_fact[cols].to_sql('fact_bdp_temp', conn, if_exists='replace', index=False)
 
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR REPLACE INTO fact_bdp
-        (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch)
-        SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch
+        (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread)
+        SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread
         FROM fact_bdp_temp
     ''')
     cursor.execute('DROP TABLE fact_bdp_temp')
@@ -230,79 +256,210 @@ def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
 # ORQUESTRACAO
 # ==========================================
 
-def checar_atualizar(hoje, db_path=DB_PATH):
+def checar_atualizar(hoje, db_path=DB_PATH, modo_manual=False):
     """
-    Roda de terca a sexta. Trata fact_pricing e fact_bdp como duas
-    atualizacoes independentes:
+    Atualiza fact_pricing e fact_bdp.
 
-      - fact_pricing (BDH): sempre mira o fechamento da segunda-feira da
-        semana corrente; se a segunda nao teve pregao, recua para o
-        ultimo dia util disponivel. Gravado sob a date_id da propria
-        segunda-feira (referencia semanal fixa).
+    modo_manual=False:
+        Comportamento normal do ETL:
+          - fact_pricing usa a segunda-feira da semana como date_id.
+          - Se segunda não teve pregão, usa o último dia útil disponível.
+          - fact_bdp usa a data de hoje como date_id.
+          - Bloqueia atualização se a semana já estiver preenchida.
 
-      - fact_bdp (BDP): e um snapshot "em tempo real", entao usa a data
-        de HOJE (dia em que o script rodou) como date_id, com o horario
-        exato da coleta guardado em collected_at. Nao depende da logica
-        de fallback de pregao, ja que BDP nao e uma cotacao de fechamento.
-
-    Cada uma so roda se ainda nao tiver dado para sua respectiva date_id,
-    o que protege contra reexecucao em dias em que o computador/terminal
-    nao estava disponivel, e permite que uma preencha mesmo se a outra
-    ja estiver ok (ex: uma execucao anterior falhou no meio do processo).
+    modo_manual=True:
+        Ignora os bloqueios da atualização automática e usa HOJE como
+        data de referência para ambas as facts.
+          - fact_pricing: busca o fechamento de HOJE.
+          - fact_bdp: busca o snapshot de HOJE.
+          - Permite reexecutar mesmo que já existam dados para hoje.
     """
-    if hoje.weekday() == 0:
-        logger.info("Hoje é segunda-feira. Este ETL roda de terça a sexta; nada a fazer hoje.")
+
+    # ------------------------------------------------------------------
+    # Validação do dia da semana
+    # ------------------------------------------------------------------
+    if hoje.weekday() == 0 and not modo_manual:
+        logger.info(
+            "Hoje é segunda-feira. Este ETL roda de terça a sexta; "
+            "nada a fazer hoje."
+        )
         return
+
     if hoje.weekday() > 4:
         logger.info("Hoje é fim de semana. Nada a fazer.")
         return
 
-    conn = sqlite3.connect(db_path)
-    try:
-        df_assets = pd.read_sql("SELECT asset_id, isin FROM dim_security", conn)
-        if df_assets.empty:
-            logger.warning("Nenhum ativo encontrado em dim_security. Abortando.")
-            return
-        tickers = df_assets['isin'].tolist()
+    if modo_manual:
+        logger.info(
+            "MODO MANUAL ATIVADO: ignorando bloqueios da atualização "
+            "automática e usando hoje como referência."
+        )
 
-        # ---------- fact_pricing (BDH, referencia = segunda da semana) ----------
+    conn = sqlite3.connect(db_path)
+
+    try:
+        df_assets = pd.read_sql(
+            "SELECT asset_id, bbg_id FROM dim_security WHERE flag_inactive = 0 AND bbg_id IS NOT NULL",
+            conn
+        )
+
+        if df_assets.empty:
+            logger.warning(
+                "Nenhum ativo encontrado em dim_security. Abortando."
+            )
+            return
+
+        tickers = df_assets['bbg_id'].dropna().tolist()
+
+        # ==============================================================
+        # MODO MANUAL
+        # ==============================================================
+        if modo_manual:
+
+            reference_date_str = hoje.strftime('%Y-%m-%d')
+            date_id_hoje = garantir_dim_date(conn, hoje)
+
+            # ----------------------------------------------------------
+            # fact_pricing
+            # ----------------------------------------------------------
+            logger.info(
+                f"[BDH][MANUAL] Buscando fechamento de {hoje}."
+            )
+
+            n_pricing = atualizar_fact_pricing(
+                conn,
+                tickers,
+                reference_date_str,
+                date_id_hoje
+            )
+
+            logger.info(
+                f"[BDH][MANUAL] Atualizados {n_pricing} registro(s) "
+                f"em fact_pricing."
+            )
+
+            # ----------------------------------------------------------
+            # fact_bdp
+            # ----------------------------------------------------------
+            agora = datetime.now()
+            collected_at = agora.strftime('%Y-%m-%d %H:%M:%S')
+
+            logger.info(
+                f"[BDP][MANUAL] Buscando snapshot de {hoje} "
+                f"({collected_at})."
+            )
+
+            n_bdp = atualizar_fact_bdp(
+                conn,
+                tickers,
+                date_id_hoje,
+                collected_at
+            )
+
+            logger.info(
+                f"[BDP][MANUAL] Atualizados {n_bdp} registro(s) "
+                f"em fact_bdp."
+            )
+
+            return
+
+        # ==============================================================
+        # MODO AUTOMÁTICO
+        # ==============================================================
         segunda = descobrir_segunda_da_semana(hoje)
         date_id_segunda = int(segunda.strftime('%Y%m%d'))
 
-        if tabela_ja_preenchida(conn, 'fact_pricing', date_id_segunda):
-            logger.info(f"[BDH] Semana de {segunda} ja preenchida em fact_pricing. Pulando.")
+        # ---------- fact_pricing (BDH) ----------
+        if tabela_ja_preenchida(
+            conn,
+            'fact_pricing',
+            date_id_segunda
+        ):
+            logger.info(
+                f"[BDH] Semana de {segunda} já preenchida "
+                f"em fact_pricing. Pulando."
+            )
         else:
             amostra = tickers[: min(5, len(tickers))]
-            data_ref = resolver_data_referencia(amostra, segunda)
+            data_ref = resolver_data_referencia(
+                amostra,
+                segunda
+            )
 
             if data_ref is None:
-                logger.error("[BDH] Nao foi possivel resolver data de referencia. fact_pricing nao sera atualizada.")
+                logger.error(
+                    "[BDH] Não foi possível resolver data de referência. "
+                    "fact_pricing não será atualizada."
+                )
             else:
-                date_id_pricing = garantir_dim_date(conn, segunda)
-                reference_date_str = data_ref.strftime('%Y-%m-%d')
+                date_id_pricing = garantir_dim_date(
+                    conn,
+                    segunda
+                )
+
+                reference_date_str = data_ref.strftime(
+                    '%Y-%m-%d'
+                )
 
                 if data_ref != segunda:
                     logger.info(
-                        f"[BDH] Segunda ({segunda}) sem dados. Usando fechamento de {data_ref} "
-                        f"como referencia, gravado sob date_id de {segunda}."
+                        f"[BDH] Segunda ({segunda}) sem dados. "
+                        f"Usando fechamento de {data_ref} como referência, "
+                        f"gravado sob date_id de {segunda}."
                     )
 
-                n_pricing = atualizar_fact_pricing(conn, tickers, reference_date_str, date_id_pricing)
-                logger.info(f"[BDH] Semana de {segunda} atualizada: {n_pricing} registro(s) em fact_pricing.")
+                n_pricing = atualizar_fact_pricing(
+                    conn,
+                    tickers,
+                    reference_date_str,
+                    date_id_pricing
+                )
 
-        # ---------- fact_bdp (BDP, referencia = dia real da coleta) ----------
+                logger.info(
+                    f"[BDH] Semana de {segunda} atualizada: "
+                    f"{n_pricing} registro(s) em fact_pricing."
+                )
+
+        # ---------- fact_bdp (BDP) ----------
         agora = datetime.now()
 
-        if tabela_ja_preenchida_na_semana(conn, 'fact_bdp', segunda):
-            logger.info(f"[BDP] Snapshot da semana de {segunda} ja preenchido em fact_bdp. Pulando.")
+        if tabela_ja_preenchida_na_semana(
+            conn,
+            'fact_bdp',
+            segunda
+        ):
+            logger.info(
+                f"[BDP] Snapshot da semana de {segunda} já preenchido "
+                f"em fact_bdp. Pulando."
+            )
         else:
-            date_id_hoje = garantir_dim_date(conn, hoje)
-            collected_at = agora.strftime('%Y-%m-%d %H:%M:%S')
-            n_bdp = atualizar_fact_bdp(conn, tickers, date_id_hoje, collected_at)
-            logger.info(f"[BDP] Snapshot de {hoje} ({collected_at}) atualizado: {n_bdp} registro(s) em fact_bdp.")
+            date_id_hoje = garantir_dim_date(
+                conn,
+                hoje
+            )
+
+            collected_at = agora.strftime(
+                '%Y-%m-%d %H:%M:%S'
+            )
+
+            n_bdp = atualizar_fact_bdp(
+                conn,
+                tickers,
+                date_id_hoje,
+                collected_at
+            )
+
+            logger.info(
+                f"[BDP] Snapshot de {hoje} ({collected_at}) atualizado: "
+                f"{n_bdp} registro(s) em fact_bdp."
+            )
 
     except Exception as e:
-        logger.error(f"Erro ao checar/atualizar: {e}", exc_info=True)
+        logger.error(
+            f"Erro ao checar/atualizar: {e}",
+            exc_info=True
+        )
+
     finally:
         conn.close()
 
@@ -313,7 +470,8 @@ def main():
     logger.info("=" * 60)
 
     hoje = datetime.now().date()
-    checar_atualizar(hoje)
+    modo_manual = False
+    checar_atualizar(hoje, modo_manual=modo_manual)
 
     logger.info("=" * 60)
     logger.info("ATUALIZACAO CONCLUIDA")

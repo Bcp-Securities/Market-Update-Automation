@@ -34,7 +34,7 @@ logger = logging.getLogger("atualizador_dim_security")
 def register_new_assets(tickers, db_path=DB_PATH):
     logger.info(f"Cadastrando {len(tickers)} novo(s) ativo(s)...")
 
-    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME']
+    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE']
 
     try:
         logger.info(f"Buscando dados...")
@@ -57,12 +57,18 @@ def register_new_assets(tickers, db_path=DB_PATH):
         df_bdp['issue_dt'] = pd.to_datetime(df_bdp['issue_dt'], errors='coerce').dt.strftime('%Y-%m-%d')
 
         df_bdp.rename(columns={
+            'ticker': 'bbg_id',
             'TICKER': 'ticker',
-            'ticker': 'isin',
             'CPN': 'coupon',
             'MATURITY': 'maturity',
             'issue_dt': 'issue_date',
-            'BICS_LEVEL_2_INDUSTRY_GROUP_NAME': 'industry_group'
+            'BICS_LEVEL_2_INDUSTRY_GROUP_NAME': 'industry_group',
+            'ISSUER': 'issuer',
+            'ID_ISIN': 'isin',
+            'CRNCY': 'currency',
+            'PAYMENT_RANK': 'collateral',
+            'AMT_ISSUED': 'amt_issuance',
+            'MIN_PIECE': 'min_piece'
         }, inplace=True)
 
         conn = sqlite3.connect(db_path)
@@ -70,9 +76,9 @@ def register_new_assets(tickers, db_path=DB_PATH):
 
         for _, row in df_bdp.iterrows():
             cursor.execute('''
-                INSERT OR IGNORE INTO dim_security (isin, ticker, coupon, maturity, issue_date, industry_group)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (row['isin'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group']))
+                INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (row['bbg_id'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group'], row['issuer'], row['isin'], row['currency'], row['collateral'], row['amt_issuance'], row['min_piece']))
 
         conn.commit()
         logger.info("Ativos cadastrados com sucesso na dim_security.")
@@ -106,7 +112,7 @@ def fetch_isins_from_excel_background(filepath, sheet_name='Sheet1', cell_start=
 
         logger.info("Aguardando comunicação com o terminal Bloomberg...")
 
-        max_retries = 30
+        max_retries = 60
         for tentativa in range(max_retries):
             pythoncom.PumpWaitingMessages()
 
@@ -114,7 +120,7 @@ def fetch_isins_from_excel_background(filepath, sheet_name='Sheet1', cell_start=
 
             if "Requesting" in valor_a1 or "#N/A" in valor_a1 or valor_a1 == 'None':
                 time.sleep(1)
-                if tentativa == 5 or tentativa == 15:
+                if tentativa == 15 or tentativa == 30:
                     logger.warning("Ainda sem resposta, iniciando recalculo")
                     excel.CalculateFullRebuild()
                 continue
@@ -180,12 +186,48 @@ def check_and_register_new_issues(filepath, db_path=DB_PATH):
     finally:
         conn.close()
 
+def check_inactive_flag(db_path=DB_PATH):
+    """
+    Verifica os critérios de inatividade e atualiza a coluna flag_inactive na dim_security.
+    Critérios de inatividade:
+    - Ativos com maturity date no passado (maturity < hoje)
+    - Ativos com amt_outstanding = 0 (última observação na fact_bdp)
+    """
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("""
+            UPDATE dim_security
+            SET flag_inactive = 1
+            WHERE maturity < date('now')
+        """)
+        conn.execute("""
+            UPDATE dim_security
+            SET flag_inactive = 1
+            WHERE asset_id IN (
+                SELECT asset_id
+                FROM fact_bdp f
+                WHERE date_id = (
+                    SELECT MAX(f2.date_id)
+                    FROM fact_bdp f2
+                    WHERE f2.asset_id = f.asset_id
+                )
+                AND amt_outstanding = 0
+            )
+        """)
+        conn.commit()
+        logger.info("Flag de inatividade atualizada com sucesso na dim_security.")
+    except Exception as e:
+        logger.error(f"Erro ao verificar flag de inatividade: {e}", exc_info=True)
+    finally:
+        conn.close()
+
 def main():
     logger.info("=" * 60)
     logger.info("INICIANDO ATUALIZAÇÃO AUTOMATIZADA DIM_SECURITY")
     logger.info("=" * 60)
 
     check_and_register_new_issues(EXCEL_FILE)
+    check_inactive_flag()
 
     logger.info("=" * 60)
     logger.info("ATUALIZAÇÃO CONCLUÍDA")
