@@ -9,7 +9,7 @@ cd /d "%~dp0"
 
 set PYTHON_VENV="%~dp0.venv\Scripts\python.exe"
 
-set SCRIPT_MAIN=market_update.py
+set SCRIPT_MAIN=updates_daily\market_update.py
 
 set LOCKFILE="%~dp0run_market_update.lock"
 set LOGDIR=%~dp0logs

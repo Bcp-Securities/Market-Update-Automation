@@ -9,8 +9,8 @@ cd /d "%~dp0"
 
 set PYTHON_VENV="%~dp0.venv\Scripts\python.exe"
 
-set SCRIPT_1=update_dim_security.py
-set SCRIPT_2=update_fact_pricing.py
+set SCRIPT_1=updates_weekly\update_dim_security.py
+set SCRIPT_2=updates_weekly\update_fact_pricing.py
 
 set LOCKFILE="%~dp0run_fact_update.lock"
 set LOGDIR=%~dp0logs

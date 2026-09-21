@@ -13,7 +13,7 @@ import requests
 # CONFIGURAÇÕES
 # ==========================================
 
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = BASE_DIR / "market_update.db"
 LOG_DIR = BASE_DIR / "logs"
 

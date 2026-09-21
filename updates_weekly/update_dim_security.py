@@ -11,8 +11,8 @@ from logging.handlers import RotatingFileHandler
 import xbbg
 xbbg.set_backend("pandas")
 
-BASE_DIR = Path(__file__).resolve().parent
-EXCEL_FILE = BASE_DIR / "new_issues.xlsx"
+BASE_DIR = Path(__file__).resolve().parent.parent
+EXCEL_FILE = BASE_DIR / "updates_weekly" / "new_issues.xlsx"
 DB_PATH = BASE_DIR / "market_update.db"
 LOG_DIR = BASE_DIR / "logs"
 
@@ -34,7 +34,7 @@ logger = logging.getLogger("atualizador_dim_security")
 def register_new_assets(tickers, db_path=DB_PATH):
     logger.info(f"Cadastrando {len(tickers)} novo(s) ativo(s)...")
 
-    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE']
+    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE', 'cntry_of_risk']
 
     try:
         logger.info(f"Buscando dados...")
@@ -68,7 +68,8 @@ def register_new_assets(tickers, db_path=DB_PATH):
             'CRNCY': 'currency',
             'PAYMENT_RANK': 'collateral',
             'AMT_ISSUED': 'amt_issuance',
-            'MIN_PIECE': 'min_piece'
+            'MIN_PIECE': 'min_piece',
+            'cntry_of_risk': 'cntry_of_risk'
         }, inplace=True)
 
         conn = sqlite3.connect(db_path)
@@ -76,9 +77,9 @@ def register_new_assets(tickers, db_path=DB_PATH):
 
         for _, row in df_bdp.iterrows():
             cursor.execute('''
-                INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (row['bbg_id'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group'], row['issuer'], row['isin'], row['currency'], row['collateral'], row['amt_issuance'], row['min_piece']))
+                INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece, cntry_of_risk)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (row['bbg_id'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group'], row['issuer'], row['isin'], row['currency'], row['collateral'], row['amt_issuance'], row['min_piece'], row['cntry_of_risk']))
 
         conn.commit()
         logger.info("Ativos cadastrados com sucesso na dim_security.")
@@ -186,6 +187,35 @@ def check_and_register_new_issues(filepath, db_path=DB_PATH):
     finally:
         conn.close()
 
+def manual_insert_new_issues(tickers, db_path=DB_PATH):
+    """
+    Permite inserir manualmente uma lista de ISINs na dim_security.
+    """
+    if not tickers:
+        logger.warning("Nenhum ISIN fornecido para inserção manual.")
+        return
+
+    logger.info(f"Iniciando inserção manual de {len(tickers)} ativo(s)...")
+
+    conn = sqlite3.connect(db_path)
+    try:
+        df_db = pd.read_sql("SELECT isin FROM dim_security", conn)
+        tickers_db = set(df_db['isin'].tolist())
+
+        tickers_set = set(tickers)
+
+        novos_tickers = list(tickers_set - tickers_db)
+
+        if novos_tickers:
+            logger.info(f"Encontrados {len(novos_tickers)} ativos novos. Iniciando cadastro...")
+            logger.info(f"Encontrados: {novos_tickers}")
+            register_new_assets(novos_tickers, db_path)
+        else:
+            logger.info("Nenhum ativo novo. Todos os bonds do SRCH já estão na dim_security.")
+
+    finally:
+        conn.close()
+
 def check_inactive_flag(db_path=DB_PATH):
     """
     Verifica os critérios de inatividade e atualiza a coluna flag_inactive na dim_security.
@@ -235,4 +265,10 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main()
+    tickers = [
+        "US53222MAC64@bval CORP",
+        "US53222MAD48@bval CORP",
+        "US12550EAA64 Corp",
+    ]
+    manual_insert_new_issues(tickers)

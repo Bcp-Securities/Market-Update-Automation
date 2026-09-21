@@ -9,7 +9,7 @@ cd /d "%~dp0"
 
 set PYTHON_VENV="%~dp0.venv\Scripts\python.exe"
 
-set SCRIPT_MONTHLY=monthly_update.py
+set SCRIPT_MONTHLY=updates_monthly\monthly_update.py
 
 set LOCKFILE="%~dp0run_monthly_update.lock"
 set LOGDIR=%~dp0logs
