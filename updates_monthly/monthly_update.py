@@ -143,6 +143,19 @@ def fetch_frbsf_cpi(meta_row: dict) -> pd.DataFrame:
     df["value"] = pd.to_numeric(df[value_field], errors="coerce")
     df["series_code"] = series_code
 
+    if series_code == "cpi_headline_yoy":
+        # Preenchendo valores de CPI Headline que tenham vindo vazios quando for possível, usando a soma dos outros campos
+        for idx, row in df.iterrows():
+            if pd.isna(row["value"]):
+                row["food"] = pd.to_numeric(row["food"], errors="coerce")
+                row["energy"] = pd.to_numeric(row["energy"], errors="coerce")
+                row["core_goods"] = pd.to_numeric(row["core_goods"], errors="coerce")
+                row["core_services"] = pd.to_numeric(row["core_services"], errors="coerce")
+                row["shelter"] = pd.to_numeric(row["shelter"], errors="coerce")
+                soma = row[["food", "energy", "core_goods", "core_services", "shelter"]].sum(skipna=True)
+                if not pd.isna(soma):
+                    df.at[idx, "value"] = soma
+
     return df[["series_code", "obs_date", "value"]].dropna(subset=["obs_date"])
 
 
