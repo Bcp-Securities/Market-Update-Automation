@@ -113,75 +113,139 @@
         <section class="tab-panel" id="panel-lote">
             <div class="panel-intro">
                 <h2>Preenchimento em lote</h2>
-                <p>
-                    Selecione um ou mais ativos e informe o período para o preenchimento
-                    das tabelas relacionadas.
-                </p>
+                <p>Escolha o tipo de preenchimento, selecione os ativos e informe o período.</p>
             </div>
 
-            <div class="panel-grid panel-grid-single">
-                <div class="card form-card">
+            <!-- Sub-abas internas: cada uma representa um tipo de preenchimento em lote -->
+            <nav class="subtab-bar" role="tablist">
+                <button class="subtab-btn is-active" data-subtab="tipo1" role="tab">Preço e Yield</button>
+                <button class="subtab-btn" data-subtab="tipo2" role="tab">Holders</button>
+                <button class="subtab-btn" data-subtab="tipo3" role="tab">Volume</button>
+            </nav>
 
-                    <!-- Ativos -->
-                    <div class="field-group">
-                        <label class="field-label" for="select-lote">
-                            Ativos
-                        </label>
-
-                        <select id="select-lote" multiple></select>
-
-                        <p class="field-hint">
-                            Selecione um ou mais ativos para processar.
-                        </p>
-                    </div>
-
-                    <!-- Período -->
-                    <div class="date-range">
-                        <div class="field-group">
-                            <label class="field-label" for="data-inicial-lote">
-                                Data inicial
-                            </label>
-
-                            <input
-                                type="date"
-                                id="data-inicial-lote"
-                                name="data_inicial"
-                            />
-                        </div>
+            <!-- ---------- Sub-aba: Tipo 1 - Preço e Yield---------- -->
+            <div class="subtab-panel is-active" id="subpanel-tipo1" data-lote-tipo="tipo1">
+                <div class="panel-grid panel-grid-single">
+                    <div class="card form-card">
 
                         <div class="field-group">
-                            <label class="field-label" for="data-final-lote">
-                                Data final
-                            </label>
-
-                            <input
-                                type="date"
-                                id="data-final-lote"
-                                name="data_final"
-                            />
+                            <label class="field-label" for="select-lote-tipo1">Ativos</label>
+                            <select id="select-lote-tipo1" multiple></select>
+                            <p class="field-hint">Selecione um ou mais ativos para processar.</p>
                         </div>
+
+                        <div class="date-range">
+                            <div class="field-group">
+                                <label class="field-label" for="data-inicial-tipo1">Data inicial</label>
+                                <input type="date" id="data-inicial-tipo1" name="data_inicial">
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="data-final-tipo1">Data final</label>
+                                <input type="date" id="data-final-tipo1" name="data_final">
+                            </div>
+                        </div>
+
+                        <div class="action-row action-row-end">
+                            <button class="btn btn-primary btn-processar-lote" data-lote-tipo="tipo1">
+                                <span class="btn-label">Processar selecionados</span>
+                                <span class="btn-spinner" hidden></span>
+                            </button>
+                        </div>
+
+                        <p class="field-hint lote-feedback" data-lote-tipo="tipo1"></p>
                     </div>
 
-                    <!-- Ação -->
-                    <div class="action-row action-row-end">
-                        <button class="btn btn-primary" id="btn-processar-lote">
-                            <span class="btn-label">Processar selecionados</span>
-                            <span class="btn-spinner" hidden></span>
-                        </button>
+                    <div class="card result-card lote-resultado" data-lote-tipo="tipo1" hidden>
+                        <div class="result-header">
+                            <h3>Resultado do processamento</h3>
+                        </div>
+                        <ul class="result-list lote-lista" data-lote-tipo="tipo1"></ul>
                     </div>
-
-                    <p class="field-hint" id="lote-feedback"></p>
-                </div>
-
-                <!-- Resultado -->
-                <div class="card result-card" id="lote-resultado" hidden>
-                    <div class="result-header">
-                        <h3>Resultado do processamento</h3>
-                    </div>
-
-                    <ul class="result-list" id="lote-lista"></ul>
                 </div>
             </div>
+
+            <!-- ---------- Sub-aba: Tipo 2 - Holders ---------- -->
+            <div class="subtab-panel" id="subpanel-tipo2" data-lote-tipo="tipo2">
+                <div class="panel-grid panel-grid-single">
+                    <div class="card form-card">
+
+                        <div class="field-group">
+                            <label class="field-label" for="select-lote-tipo2">Ativos</label>
+                            <select id="select-lote-tipo2" multiple></select>
+                            <p class="field-hint">Selecione um ou mais ativos para processar.</p>
+                        </div>
+
+                        <div class="date-range">
+                            <div class="field-group">
+                                <label class="field-label" for="data-inicial-tipo2">Data inicial</label>
+                                <input type="date" id="data-inicial-tipo2" name="data_inicial">
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="data-final-tipo2">Data final</label>
+                                <input type="date" id="data-final-tipo2" name="data_final">
+                            </div>
+                        </div>
+
+                        <div class="action-row action-row-end">
+                            <button class="btn btn-primary btn-processar-lote" data-lote-tipo="tipo2">
+                                <span class="btn-label">Processar selecionados</span>
+                                <span class="btn-spinner" hidden></span>
+                            </button>
+                        </div>
+
+                        <p class="field-hint lote-feedback" data-lote-tipo="tipo2"></p>
+                    </div>
+
+                    <div class="card result-card lote-resultado" data-lote-tipo="tipo2" hidden>
+                        <div class="result-header">
+                            <h3>Resultado do processamento</h3>
+                        </div>
+                        <ul class="result-list lote-lista" data-lote-tipo="tipo2"></ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ---------- Sub-aba: Tipo 3 - Volume ---------- -->
+            <div class="subtab-panel" id="subpanel-tipo3" data-lote-tipo="tipo3">
+                <div class="panel-grid panel-grid-single">
+                    <div class="card form-card">
+
+                        <div class="field-group">
+                            <label class="field-label" for="select-lote-tipo3">Ativos</label>
+                            <select id="select-lote-tipo3" multiple></select>
+                            <p class="field-hint">Selecione um ou mais ativos para processar.</p>
+                        </div>
+
+                        <div class="date-range">
+                            <div class="field-group">
+                                <label class="field-label" for="data-inicial-tipo3">Data inicial</label>
+                                <input type="date" id="data-inicial-tipo3" name="data_inicial">
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="data-final-tipo3">Data final</label>
+                                <input type="date" id="data-final-tipo3" name="data_final">
+                            </div>
+                        </div>
+
+                        <div class="action-row action-row-end">
+                            <button class="btn btn-primary btn-processar-lote" data-lote-tipo="tipo3">
+                                <span class="btn-label">Processar selecionados</span>
+                                <span class="btn-spinner" hidden></span>
+                            </button>
+                        </div>
+
+                        <p class="field-hint lote-feedback" data-lote-tipo="tipo3"></p>
+                    </div>
+
+                    <div class="card result-card lote-resultado" data-lote-tipo="tipo3" hidden>
+                        <div class="result-header">
+                            <h3>Resultado do processamento</h3>
+                        </div>
+                        <ul class="result-list lote-lista" data-lote-tipo="tipo3"></ul>
+                    </div>
+                </div>
+            </div>
+
         </section>
 
     </main>

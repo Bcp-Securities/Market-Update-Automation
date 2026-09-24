@@ -335,32 +335,30 @@ def db_atualizar_ativo(dados):
     return {"sucesso": True, "mensagem": f"Ativo {dados.get('bbg_id')} atualizado com sucesso."}
 
 
-def preencher_tabelas_sob_demanda(lista_ativo_ids):
+def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inicial, data_final):
     """
-    Dispara o preenchimento sob demanda de DUAS tabelas do banco para os
-    ativos selecionados (Aba 3). Tipicamente vai buscar dados adicionais
-    na Bloomberg para cada ativo e gravar em duas tabelas relacionadas.
-
+    ...
     Parâmetros:
-        lista_ativo_ids (list[str]): IDs internos dos ativos selecionados.
-
-    Retorno esperado (dict):
-        {
-            "sucesso": bool,
-            "mensagem": str,
-            "detalhes": [
-                {"id": str, "status": "ok"/"erro", "mensagem": str}, ...
-            ]
-        }
+        tipo_preenchimento (str): qual das sub-abas disparou a chamada
+            ("tipo1", "tipo2" ou "tipo3"). Use isso para rotear para a
+            lógica/tabelas corretas de cada tipo de preenchimento.
+        lista_ativo_ids (list[str])
+        data_inicial (str): "YYYY-MM-DD"
+        data_final (str): "YYYY-MM-DD"
+    ...
     """
+    print(tipo_preenchimento)
+    print(lista_ativo_ids)
+    print(data_inicial)
+    print(data_final)
     # --- PLACEHOLDER ---
     detalhes = [
-        {"id": ativo_id, "status": "ok", "mensagem": "Tabelas A e B preenchidas."}
+        {"id": ativo_id, "status": "ok", "mensagem": f"[{tipo_preenchimento}] Tabelas preenchidas."}
         for ativo_id in lista_ativo_ids
     ]
     return {
         "sucesso": True,
-        "mensagem": f"Processamento concluído para {len(lista_ativo_ids)} ativo(s).",
+        "mensagem": f"Processamento ({tipo_preenchimento}) concluído para {len(lista_ativo_ids)} ativo(s).",
         "detalhes": detalhes,
     }
 
@@ -438,12 +436,15 @@ def api_atualizar_ativo():
 @app.route('/api/preencher-lote', methods=['POST'])
 def api_preencher_lote():
     payload = request.get_json(silent=True) or {}
+    tipo = payload.get('tipo_preenchimento') or 'tipo1'
     ids = payload.get('ativo_ids') or []
+    data_inicial = payload.get('data_inicial')
+    data_final = payload.get('data_final')
 
     if not ids:
         return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um ativo."}), 400
 
-    resultado = preencher_tabelas_sob_demanda(ids)
+    resultado = preencher_tabelas_sob_demanda(tipo, ids, data_inicial, data_final)
     return jsonify(resultado)
 
 

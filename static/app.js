@@ -2,6 +2,8 @@
 // Utilitários gerais
 // =====================================================================
 
+let atualizarListaAtivosGlobal = null;
+
 const LABELS = {
     bbg_id: 'ID',
     isin: 'ISIN',
@@ -143,6 +145,11 @@ function initAbaCadastrar() {
                 body: JSON.stringify(dadosAtuais),
             });
             showToast(data.mensagem, data.sucesso ? 'success' : 'error');
+
+            if (data.sucesso) {
+                await atualizarListaAtivosGlobal();
+            }
+
             resetResultado();
             form.reset();
         } catch (err) {
@@ -330,129 +337,151 @@ function initAbaEditar(listaAtivos) {
             btnSalvar.disabled = false;
         }
     });
+
+    return function atualizarListaAtivos(novaLista) {
+        choices.clearChoices();
+        choices.setChoices(
+            novaLista.map((a) => ({
+                value: a.bbg_id,
+                label: a.label
+            })),
+            'value',
+            'label',
+            true
+        );
+    };
 }
 
 // =====================================================================
-// Aba 3 — Preenchimento em lote
+// Aba 3 — Preenchimento em lote (com sub-abas para diferentes tipos)
 // =====================================================================
 
+// Cada entrada representa um tipo de preenchimento em lote e liga os
+// elementos do DOM daquela sub-aba pelo sufixo de id / data-lote-tipo.
+// Para adicionar um novo tipo: (1) copie um bloco de sub-aba no HTML
+// trocando "tipoN", (2) adicione o botão em .subtab-bar, (3) adicione
+// uma entrada aqui.
+const TIPOS_LOTE = ['tipo1', 'tipo2', 'tipo3'];
+
+function initSubTabsLote() {
+    const buttons = document.querySelectorAll('.subtab-btn');
+    buttons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+            buttons.forEach((b) => b.classList.remove('is-active'));
+            document.querySelectorAll('.subtab-panel').forEach((p) => p.classList.remove('is-active'));
+
+            btn.classList.add('is-active');
+            document.getElementById(`subpanel-${btn.dataset.subtab}`).classList.add('is-active');
+        });
+    });
+}
+
 function initAbaLote(listaAtivos) {
-    const selectEl = document.getElementById('select-lote');
-    const dataInicialEl = document.getElementById('data-inicial-lote');
-    const dataFinalEl = document.getElementById('data-final-lote');
+    initSubTabsLote();
 
-    const btnProcessar = document.getElementById('btn-processar-lote');
-    const feedback = document.getElementById('lote-feedback');
-    const resultado = document.getElementById('lote-resultado');
-    const lista = document.getElementById('lote-lista');
+    const choicesPorTipo = {};
 
-    const choices = new Choices(selectEl, {
-        searchEnabled: true,
-        removeItemButton: true,
-        placeholder: true,
-        placeholderValue: 'Selecione um ou mais ativos...',
-        choices: listaAtivos.map((a) => ({
-            value: a.bbg_id,
-            label: a.label
-        })),
+    TIPOS_LOTE.forEach((tipo) => {
+        const selectEl = document.getElementById(`select-lote-${tipo}`);
+        const dataInicialEl = document.getElementById(`data-inicial-${tipo}`);
+        const dataFinalEl = document.getElementById(`data-final-${tipo}`);
+        const btnProcessar = document.querySelector(`.btn-processar-lote[data-lote-tipo="${tipo}"]`);
+        const feedback = document.querySelector(`.lote-feedback[data-lote-tipo="${tipo}"]`);
+        const resultado = document.querySelector(`.lote-resultado[data-lote-tipo="${tipo}"]`);
+        const lista = document.querySelector(`.lote-lista[data-lote-tipo="${tipo}"]`);
+
+        const choices = new Choices(selectEl, {
+            searchEnabled: true,
+            removeItemButton: true,
+            placeholder: true,
+            placeholderValue: 'Selecione um ou mais ativos...',
+            choices: listaAtivos.map((a) => ({
+                value: a.bbg_id,
+                label: a.label,
+            })),
+        });
+
+        choicesPorTipo[tipo] = choices;
+
+        btnProcessar.addEventListener('click', async () => {
+            const selecionados = choices.getValue(true);
+            const dataInicial = dataInicialEl.value;
+            const dataFinal = dataFinalEl.value;
+
+            // ---------------- Validações ----------------
+            if (!selecionados.length) {
+                setFieldHint(feedback, 'Selecione ao menos um ativo.', 'error');
+                return;
+            }
+            if (!dataInicial) {
+                setFieldHint(feedback, 'Informe a data inicial.', 'error');
+                dataInicialEl.focus();
+                return;
+            }
+            if (!dataFinal) {
+                setFieldHint(feedback, 'Informe a data final.', 'error');
+                dataFinalEl.focus();
+                return;
+            }
+            if (dataInicial > dataFinal) {
+                setFieldHint(feedback, 'A data inicial não pode ser posterior à data final.', 'error');
+                dataInicialEl.focus();
+                return;
+            }
+
+            // ---------------- Processamento ----------------
+            setFieldHint(feedback, '');
+            setButtonLoading(btnProcessar, true);
+            resultado.hidden = true;
+
+            try {
+                const data = await apiRequest('/api/preencher-lote', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        tipo_preenchimento: tipo, // <- diz ao back-end qual dos 3 fluxos rodar
+                        ativo_ids: selecionados,
+                        data_inicial: dataInicial,
+                        data_final: dataFinal,
+                    }),
+                });
+
+                lista.innerHTML = '';
+                data.detalhes.forEach((item) => {
+                    const li = document.createElement('li');
+                    li.innerHTML = `
+                        <span class="result-id">${item.id}</span>
+                        <span>${item.mensagem}</span>
+                        <span class="result-status ${item.status}">
+                            ${item.status === 'ok' ? 'OK' : 'ERRO'}
+                        </span>
+                    `;
+                    lista.appendChild(li);
+                });
+
+                resultado.hidden = false;
+                showToast(data.mensagem, 'success');
+            } catch (err) {
+                setFieldHint(feedback, err.message, 'error');
+            } finally {
+                setButtonLoading(btnProcessar, false);
+            }
+        });
     });
 
-    btnProcessar.addEventListener('click', async () => {
-        const selecionados = choices.getValue(true);
-        const dataInicial = dataInicialEl.value;
-        const dataFinal = dataFinalEl.value;
-
-        // -------------------------------------------------------------
-        // Validação dos ativos
-        // -------------------------------------------------------------
-
-        if (!selecionados.length) {
-            setFieldHint(
-                feedback,
-                'Selecione ao menos um ativo.',
-                'error'
+    return function atualizarListaAtivos(novaLista) {
+        Object.values(choicesPorTipo).forEach((choices) => {
+            choices.clearChoices();
+            choices.setChoices(
+                novaLista.map((a) => ({
+                    value: a.bbg_id,
+                    label: a.label,
+                })),
+                'value',
+                'label',
+                true
             );
-            return;
-        }
-
-        // -------------------------------------------------------------
-        // Validação das datas
-        // -------------------------------------------------------------
-
-        if (!dataInicial) {
-            setFieldHint(
-                feedback,
-                'Informe a data inicial.',
-                'error'
-            );
-            dataInicialEl.focus();
-            return;
-        }
-
-        if (!dataFinal) {
-            setFieldHint(
-                feedback,
-                'Informe a data final.',
-                'error'
-            );
-            dataFinalEl.focus();
-            return;
-        }
-
-        if (dataInicial > dataFinal) {
-            setFieldHint(
-                feedback,
-                'A data inicial não pode ser posterior à data final.',
-                'error'
-            );
-            dataInicialEl.focus();
-            return;
-        }
-
-        // -------------------------------------------------------------
-        // Processamento
-        // -------------------------------------------------------------
-
-        setFieldHint(feedback, '');
-        setButtonLoading(btnProcessar, true);
-        resultado.hidden = true;
-
-        try {
-            const data = await apiRequest('/api/preencher-lote', {
-                method: 'POST',
-                body: JSON.stringify({
-                    ativo_ids: selecionados,
-                    data_inicial: dataInicial,
-                    data_final: dataFinal,
-                }),
-            });
-
-            lista.innerHTML = '';
-
-            data.detalhes.forEach((item) => {
-                const li = document.createElement('li');
-
-                li.innerHTML = `
-                    <span class="result-id">${item.id}</span>
-                    <span>${item.mensagem}</span>
-                    <span class="result-status ${item.status}">
-                        ${item.status === 'ok' ? 'OK' : 'ERRO'}
-                    </span>
-                `;
-
-                lista.appendChild(li);
-            });
-
-            resultado.hidden = false;
-            showToast(data.mensagem, 'success');
-
-        } catch (err) {
-            setFieldHint(feedback, err.message, 'error');
-
-        } finally {
-            setButtonLoading(btnProcessar, false);
-        }
-    });
+        });
+    };
 }
 
 // =====================================================================
@@ -465,8 +494,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     try {
         const data = await apiRequest('/api/ativos');
-        initAbaEditar(data.ativos);
-        initAbaLote(data.ativos);
+        const atualizarListaEditar = initAbaEditar(data.ativos);
+        const atualizarListaLote = initAbaLote(data.ativos);
+        
+        atualizarListaAtivosGlobal = async () => {
+            const novaData = await apiRequest('/api/ativos');
+
+            atualizarListaEditar(novaData.ativos);
+            atualizarListaLote(novaData.ativos);
+        };
     } catch (err) {
         showToast('Não foi possível carregar a lista de ativos.', 'error');
     }

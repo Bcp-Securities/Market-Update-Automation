@@ -143,6 +143,51 @@ body {
     color: var(--accent);
 }
 
+/* ---------------------------- Sub-tabs (dentro da Aba 3) ---------------------------- */
+
+.subtab-bar {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 20px;
+    padding: 4px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    width: fit-content;
+}
+
+.subtab-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 7px 14px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+
+.subtab-btn:hover {
+    color: var(--text-primary);
+}
+
+.subtab-btn.is-active {
+    background: var(--accent);
+    color: var(--accent-text-on);
+}
+
+.subtab-panel {
+    display: none;
+}
+
+.subtab-panel.is-active {
+    display: block;
+    animation: panel-in 0.18s ease;
+}
+
 /* ---------------------------- Panels ---------------------------- */
 
 .tab-panel {
