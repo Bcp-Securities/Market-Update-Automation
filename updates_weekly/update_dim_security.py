@@ -265,10 +265,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    tickers = [
-        "US53222MAC64@bval CORP",
-        "US53222MAD48@bval CORP",
-        "US12550EAA64 Corp",
-    ]
-    manual_insert_new_issues(tickers)
+    main()
