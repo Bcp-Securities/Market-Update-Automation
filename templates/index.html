@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel de Ativos</title>
+
+<link
+  rel="stylesheet"
+  href="https://cdn.jsdelivr.net/npm/choices.js/public/assets/styles/choices.min.css"
+/>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<div class="app-shell">
+
+    <header class="app-header">
+        <div class="brand">
+            <span class="brand-mark">◆</span>
+            <div class="brand-text">
+                <h1>Painel Market Update</h1>
+                <p>Cadastro, edição e preenchimento de dados via Bloomberg</p>
+            </div>
+        </div>
+    </header>
+
+    <nav class="tab-bar" role="tablist">
+        <button class="tab-btn is-active" data-tab="cadastrar" role="tab">
+            <span class="tab-index">01</span> Cadastrar
+        </button>
+        <button class="tab-btn" data-tab="editar" role="tab">
+            <span class="tab-index">02</span> Editar
+        </button>
+        <button class="tab-btn" data-tab="lote" role="tab">
+            <span class="tab-index">03</span> Preencher em lote
+        </button>
+    </nav>
+
+    <main class="tab-panels">
+
+        <!-- ==================== ABA 1: CADASTRAR ==================== -->
+        <section class="tab-panel is-active" id="panel-cadastrar">
+            <div class="panel-intro">
+                <h2>Cadastrar novo ativo</h2>
+                <p>Informe o ID Bloomberg do ativo. Vamos consultar os dados antes de gravar no banco.</p>
+            </div>
+
+            <div class="panel-grid">
+                <form class="card form-card" id="form-consultar">
+                    <label class="field-label" for="input-bloomberg-id">ID Bloomberg</label>
+                    <div class="input-row">
+                        <input type="text" id="input-bloomberg-id" placeholder="Ex: PETR4 BZ Equity" autocomplete="off" required>
+                        <button type="submit" class="btn btn-primary" id="btn-consultar">
+                            <span class="btn-label">Consultar</span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
+                    </div>
+                    <p class="field-hint" id="consultar-feedback"></p>
+                </form>
+
+                <div class="card result-card" id="resultado-consulta" hidden>
+                    <div class="result-header">
+                        <h3>Dados encontrados</h3>
+                        <span class="badge badge-found">Encontrado na Bloomberg</span>
+                    </div>
+
+                    <dl class="data-grid" id="grid-consulta"></dl>
+
+                    <div class="action-row">
+                        <button class="btn btn-ghost" id="btn-cancelar-cadastro">Cancelar</button>
+                        <button class="btn btn-success" id="btn-confirmar-cadastro">Confirmar e salvar</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===================== ABA 2: EDITAR ===================== -->
+        <section class="tab-panel" id="panel-editar">
+            <div class="panel-intro">
+                <h2>Editar ativo existente</h2>
+                <p>Selecione um ativo já cadastrado para visualizar e ajustar suas informações.</p>
+            </div>
+ 
+            <div class="panel-grid">
+                <div class="card form-card">
+                    <label class="field-label" for="select-editar">Ativo</label>
+                    <select id="select-editar"></select>
+                </div>
+ 
+                <div class="card result-card" id="editar-card" hidden>
+                    <div class="result-header">
+                        <h3>Editar informações</h3>
+                        <span class="badge badge-neutral" id="editar-id-badge"></span>
+                    </div>
+ 
+                    <form class="edit-form" id="form-editar">
+                        <!-- Campos gerados dinamicamente por static/app.js,
+                             a partir do "schema" retornado por /api/ativo/<id> -->
+                    </form>
+ 
+                    <p class="field-hint" id="editar-feedback"></p>
+ 
+                    <div class="action-row">
+                        <button class="btn btn-ghost" id="btn-cancelar-edicao">Descartar</button>
+                        <button class="btn btn-success" id="btn-salvar-edicao">Salvar alterações</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ================= ABA 3: PREENCHER EM LOTE ================= -->
+        <section class="tab-panel" id="panel-lote">
+            <div class="panel-intro">
+                <h2>Preenchimento em lote</h2>
+                <p>
+                    Selecione um ou mais ativos e informe o período para o preenchimento
+                    das tabelas relacionadas.
+                </p>
+            </div>
+
+            <div class="panel-grid panel-grid-single">
+                <div class="card form-card">
+
+                    <!-- Ativos -->
+                    <div class="field-group">
+                        <label class="field-label" for="select-lote">
+                            Ativos
+                        </label>
+
+                        <select id="select-lote" multiple></select>
+
+                        <p class="field-hint">
+                            Selecione um ou mais ativos para processar.
+                        </p>
+                    </div>
+
+                    <!-- Período -->
+                    <div class="date-range">
+                        <div class="field-group">
+                            <label class="field-label" for="data-inicial-lote">
+                                Data inicial
+                            </label>
+
+                            <input
+                                type="date"
+                                id="data-inicial-lote"
+                                name="data_inicial"
+                            />
+                        </div>
+
+                        <div class="field-group">
+                            <label class="field-label" for="data-final-lote">
+                                Data final
+                            </label>
+
+                            <input
+                                type="date"
+                                id="data-final-lote"
+                                name="data_final"
+                            />
+                        </div>
+                    </div>
+
+                    <!-- Ação -->
+                    <div class="action-row action-row-end">
+                        <button class="btn btn-primary" id="btn-processar-lote">
+                            <span class="btn-label">Processar selecionados</span>
+                            <span class="btn-spinner" hidden></span>
+                        </button>
+                    </div>
+
+                    <p class="field-hint" id="lote-feedback"></p>
+                </div>
+
+                <!-- Resultado -->
+                <div class="card result-card" id="lote-resultado" hidden>
+                    <div class="result-header">
+                        <h3>Resultado do processamento</h3>
+                    </div>
+
+                    <ul class="result-list" id="lote-lista"></ul>
+                </div>
+            </div>
+        </section>
+
+    </main>
+</div>
+
+<div class="toast-stack" id="toast-stack"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/choices.js/public/assets/scripts/choices.min.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,655 @@
+/* =====================================================================
+   PALETA DE CORES — edite só este bloco para trocar o visual inteiro.
+   ===================================================================== */
+:root {
+    /* Fundo */
+    --bg-base: #ffffff;
+    --bg-panel: #f5f7f9;
+    --bg-panel-raised: #ffffff;
+    --bg-input: #ffffff;
+
+    /* Bordas e divisores */
+    --border-subtle: #d4d4d4;
+    --border-strong: #a5a5a5;
+
+    /* Texto */
+    --text-primary: #004363;
+    --text-secondary: #0570a7;
+    --text-muted: #a5a5a5;
+
+    /* Acento — azul principal */
+    --accent: #0787c9;
+    --accent-strong: #0570a7;
+    --accent-soft: rgba(7, 135, 201, 0.12);
+    --accent-text-on: #ffffff;
+
+    /* Estados semânticos */
+    --success: #00b866;
+    --success-soft: rgba(0, 184, 102, 0.12);
+
+    --danger: #ec6a6a;
+    --danger-soft: rgba(236, 106, 106, 0.12);
+
+    --warning: #e3b341;
+    --warning-soft: rgba(227, 179, 65, 0.12);
+
+    /* Tipografia */
+    --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+    /* Espaçamento / forma */
+    --radius: 8px;
+    --radius-sm: 5px;
+}
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+* { box-sizing: border-box; }
+
+html, body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+}
+
+/* ---------------------------- Header ---------------------------- */
+
+.app-header {
+    margin-bottom: 32px;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.brand-mark {
+    font-size: 22px;
+    color: var(--accent);
+    line-height: 1;
+}
+
+.brand-text h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 2px;
+    letter-spacing: -0.01em;
+}
+
+.brand-text p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+}
+
+/* ---------------------------- Tabs ---------------------------- */
+
+.tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 32px;
+}
+
+.tab-btn {
+    appearance: none;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    font-weight: 500;
+    padding: 12px 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.tab-index {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.tab-btn.is-active {
+    color: var(--text-primary);
+    border-bottom-color: var(--accent);
+}
+
+.tab-btn.is-active .tab-index {
+    color: var(--accent);
+}
+
+/* ---------------------------- Panels ---------------------------- */
+
+.tab-panel {
+    display: none;
+}
+
+.tab-panel.is-active {
+    display: block;
+    animation: panel-in 0.18s ease;
+}
+
+@keyframes panel-in {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.panel-intro {
+    margin-bottom: 24px;
+}
+
+.panel-intro h2 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 4px;
+}
+
+.panel-intro p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 14px;
+}
+
+.panel-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 20px;
+}
+
+@media (min-width: 760px) {
+    .panel-grid:not(.panel-grid-single) {
+        grid-template-columns: minmax(260px, 340px) 1fr;
+        align-items: start;
+    }
+}
+
+/* ---------------------------- Cards ---------------------------- */
+
+.card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius);
+    padding: 20px;
+}
+
+.form-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.field-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.input-row {
+    display: flex;
+    gap: 8px;
+}
+
+input[type="text"],
+input[type="number"],
+input[type="date"],
+select {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    padding: 10px 12px;
+    outline: none;
+    transition:
+        border-color 0.15s ease,
+        box-shadow 0.15s ease;
+}
+
+input[type="text"]:focus,
+input[type="number"]:focus,
+input[type="date"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.field-hint {
+    min-height: 18px;
+    font-size: 12.5px;
+    margin: 4px 0 0;
+    color: var(--text-muted);
+}
+
+.field-hint.is-error { color: var(--danger); }
+.field-hint.is-success { color: var(--success); }
+
+/* ---------------------------- Date inputs ---------------------------- */
+
+input[type="date"] {
+    min-height: 42px;
+    cursor: pointer;
+    color-scheme: light;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.15s ease;
+}
+
+input[type="date"]::-webkit-calendar-picker-indicator:hover {
+    opacity: 1;
+}
+
+input[type="date"]::-webkit-datetime-edit {
+    color: var(--text-primary);
+}
+
+input[type="date"]::-webkit-datetime-edit-text,
+input[type="date"]::-webkit-datetime-edit-month-field,
+input[type="date"]::-webkit-datetime-edit-day-field,
+input[type="date"]::-webkit-datetime-edit-year-field {
+    color: var(--text-primary);
+}
+
+input[type="date"]::-webkit-datetime-edit-month-field:focus,
+input[type="date"]::-webkit-datetime-edit-day-field:focus,
+input[type="date"]::-webkit-datetime-edit-year-field:focus {
+    background: var(--accent-soft);
+    color: var(--accent-strong);
+    border-radius: 3px;
+}
+
+/* ---------------------------- Buttons ---------------------------- */
+
+.btn {
+    appearance: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-ui);
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 10px 16px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    white-space: nowrap;
+    transition: filter 0.15s ease, opacity 0.15s ease;
+}
+
+.btn:hover { filter: brightness(1.08); }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; filter: none; }
+
+.btn-primary {
+    background: var(--accent);
+    color: var(--accent-text-on);
+}
+
+.btn-success {
+    background: var(--success);
+    color: var(--accent-text-on);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-strong);
+}
+
+.btn-ghost:hover {
+    color: var(--text-primary);
+    border-color: var(--text-secondary);
+}
+
+.btn-spinner {
+    width: 13px;
+    height: 13px;
+    border-radius: 50%;
+    border: 2px solid rgba(0,0,0,0.25);
+    border-top-color: currentColor;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ---------------------------- Result cards ---------------------------- */
+
+.result-card {
+    animation: panel-in 0.18s ease;
+}
+
+.result-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.result-header h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.badge {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 4px 9px;
+    border-radius: 100px;
+    font-family: var(--font-mono);
+}
+
+.badge-found {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.badge-neutral {
+    background: var(--bg-panel-raised);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+}
+
+.data-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 10px 20px;
+    margin: 0;
+}
+
+.data-grid dt {
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+
+.data-grid dd {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    color: var(--text-primary);
+}
+
+.action-row {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.action-row-end {
+    border-top: none;
+    padding-top: 12px;
+    margin-top: 4px;
+}
+
+/* ---------------------------- Edit form ---------------------------- */
+
+.edit-form {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 16px;
+}
+ 
+.field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+ 
+.field-group label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+ 
+.field-group textarea {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-mono);
+    font-size: 13.5px;
+    padding: 10px 12px;
+    outline: none;
+    resize: vertical;
+    transition: border-color 0.15s ease;
+}
+ 
+.field-group textarea:focus {
+    border-color: var(--accent);
+}
+ 
+.field-group select {
+    appearance: none;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text-secondary) 50%),
+        linear-gradient(135deg, var(--text-secondary) 50%, transparent 50%);
+    background-position: calc(100% - 16px) center, calc(100% - 11px) center;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 32px;
+}
+ 
+/* Coluna que deve ocupar a linha inteira no grid de 2 colunas */
+.field-group:has(textarea) {
+    grid-column: 1 / -1;
+}
+ 
+/* Campo booleano: checkbox alinhado ao lado do label, não em bloco */
+.field-group-inline {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+}
+ 
+.field-group-inline input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+ 
+.field-group-inline label {
+    font-size: 13.5px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+/* ---------------------------- Date range ---------------------------- */
+
+.date-range {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.date-range .field-group {
+    gap: 6px;
+}
+
+@media (max-width: 560px) {
+    .date-range {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ---------------------------- Result list (lote) ---------------------------- */
+
+.result-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.result-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 13.5px;
+}
+
+.result-list .result-id {
+    font-family: var(--font-mono);
+    color: var(--text-primary);
+}
+
+.result-list .result-status {
+    font-size: 11.5px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 100px;
+}
+
+.result-status.ok {
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.result-status.erro {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
+/* ---------------------------- Toasts ---------------------------- */
+
+.toast-stack {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 50;
+}
+
+.toast {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border-strong);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius-sm);
+    padding: 12px 16px;
+    font-size: 13.5px;
+    max-width: 320px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    animation: toast-in 0.2s ease;
+}
+
+.toast.is-success { border-left-color: var(--success); }
+.toast.is-error { border-left-color: var(--danger); }
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateX(12px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* ---------------------------- Choices.js overrides ---------------------------- */
+
+.choices {
+    margin-bottom: 0;
+}
+
+.choices__inner {
+    background: var(--bg-input) !important;
+    border: 1px solid var(--border-strong) !important;
+    border-radius: var(--radius-sm) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 13.5px !important;
+    min-height: 42px;
+    padding: 7px 10px !important;
+}
+
+.choices__list--dropdown,
+.choices__list[aria-expanded] {
+    background: var(--bg-panel-raised) !important;
+    border-color: var(--border-strong) !important;
+    border-radius: var(--radius-sm) !important;
+}
+
+.choices__list--dropdown .choices__item--selectable.is-highlighted {
+    background: var(--accent-soft) !important;
+    color: var(--text-primary) !important;
+}
+
+.choices__input {
+    background: transparent !important;
+    color: var(--text-primary) !important;
+}
+
+.choices__list--single .choices__item,
+.choices__placeholder {
+    color: var(--text-primary) !important;
+    opacity: 1 !important;
+}
+
+.choices[data-type*="select-multiple"] .choices__inner,
+.choices[data-type*="text"] .choices__inner {
+    cursor: text;
+}
+
+.choices__list--multiple .choices__item {
+    background: var(--accent) !important;
+    border: none !important;
+    color: var(--accent-text-on) !important;
+    font-size: 12px !important;
+    font-weight: 600;
+    border-radius: 5px !important;
+}
+
+.choices__list--multiple .choices__item .choices__button {
+    border-left-color: rgba(0,0,0,0.25) !important;
+}
+
+.choices__list--dropdown .choices__item--selectable::after {
+    display: none !important;
+}
+
+/* ---------------------------- Responsive ---------------------------- */
+
+@media (max-width: 560px) {
+    .edit-form {
+        grid-template-columns: 1fr;
+    }
+    .input-row {
+        flex-direction: column;
+    }
+}
