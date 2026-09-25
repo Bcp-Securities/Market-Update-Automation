@@ -444,6 +444,21 @@ input[type="date"]::-webkit-datetime-edit-year-field:focus {
     color: var(--text-primary);
 }
 
+.extra-fields {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px 16px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 560px) {
+    .extra-fields {
+        grid-template-columns: 1fr;
+    }
+}
+
 .action-row {
     display: flex;
     justify-content: flex-end;

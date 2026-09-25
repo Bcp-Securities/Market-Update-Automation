@@ -50,7 +50,7 @@
                 <form class="card form-card" id="form-consultar">
                     <label class="field-label" for="input-bloomberg-id">ID Bloomberg</label>
                     <div class="input-row">
-                        <input type="text" id="input-bloomberg-id" placeholder="Ex: PETR4 BZ Equity" autocomplete="off" required>
+                        <input type="text" id="input-bloomberg-id" placeholder="Ex: XS0556373347 Corp" autocomplete="off" required>
                         <button type="submit" class="btn btn-primary" id="btn-consultar">
                             <span class="btn-label">Consultar</span>
                             <span class="btn-spinner" hidden></span>
@@ -66,6 +66,17 @@
                     </div>
 
                     <dl class="data-grid" id="grid-consulta"></dl>
+
+                    <div class="extra-fields">
+                        <div class="field-group">
+                            <label for="extra-campo1">BBG ID RegS (opcional)</label>
+                            <input type="text" id="extra-campo1" name="campo_extra_1">
+                        </div>
+                        <div class="field-group">
+                            <label for="extra-campo2">BBG ID 144A (opcional)</label>
+                            <input type="text" id="extra-campo2" name="campo_extra_2">
+                        </div>
+                    </div>
 
                     <div class="action-row">
                         <button class="btn btn-ghost" id="btn-cancelar-cadastro">Cancelar</button>

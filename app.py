@@ -140,9 +140,9 @@ def db_inserir_ativo(dados):
 
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece, cntry_of_risk)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (dados['bbg_id'], dados['ticker'], dados['coupon'], dados['maturity'], dados['issue_date'], dados['industry_group'], dados['issuer'], dados['isin'], dados['currency'], dados['collateral'], dados['amt_issuance'], dados['min_piece'], dados['cntry_of_risk']))
+            INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece, cntry_of_risk, bbg_id_regs, bbg_id_144a)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (dados['bbg_id'], dados['ticker'], dados['coupon'], dados['maturity'], dados['issue_date'], dados['industry_group'], dados['issuer'], dados['isin'], dados['currency'], dados['collateral'], dados['amt_issuance'], dados['min_piece'], dados['cntry_of_risk'], dados.get('bbg_id_regs'), dados.get('bbg_id_144a')))
 
         conn.commit()
     finally:

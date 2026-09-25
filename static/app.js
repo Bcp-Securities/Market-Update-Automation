@@ -18,6 +18,8 @@ const LABELS = {
     collateral: 'Collateral',
     amt_issuance: 'Amount Issuance',
     min_piece: 'Min. Piece',
+    bbg_id_regs: 'BBG ID RegS',
+    bbg_id_144a: 'BBG ID 144A',
 };
 
 function showToast(mensagem, tipo = 'success') {
@@ -85,6 +87,8 @@ function initAbaCadastrar() {
     const grid = document.getElementById('grid-consulta');
     const btnConfirmar = document.getElementById('btn-confirmar-cadastro');
     const btnCancelar = document.getElementById('btn-cancelar-cadastro');
+    const extraCampo1 = document.getElementById('extra-campo1');
+    const extraCampo2 = document.getElementById('extra-campo2');
 
     let dadosAtuais = null;
 
@@ -103,6 +107,8 @@ function initAbaCadastrar() {
     function resetResultado() {
         resultado.hidden = true;
         dadosAtuais = null;
+        extraCampo1.value = '';
+        extraCampo2.value = '';
     }
 
     form.addEventListener('submit', async (e) => {
@@ -139,17 +145,18 @@ function initAbaCadastrar() {
         if (!dadosAtuais) return;
         btnConfirmar.disabled = true;
 
+        const payload = {
+            ...dadosAtuais,
+            bbg_id_regs: extraCampo1.value.trim() || null,
+            bbg_id_144a: extraCampo2.value.trim() || null,
+        };
+
         try {
             const data = await apiRequest('/api/cadastrar-ativo', {
                 method: 'POST',
-                body: JSON.stringify(dadosAtuais),
+                body: JSON.stringify(payload),
             });
             showToast(data.mensagem, data.sucesso ? 'success' : 'error');
-
-            if (data.sucesso) {
-                await atualizarListaAtivosGlobal();
-            }
-
             resetResultado();
             form.reset();
         } catch (err) {
