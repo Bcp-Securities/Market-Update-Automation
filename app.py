@@ -1,3 +1,4 @@
+from datetime import datetime, date, timedelta
 import pandas as pd
 import logging
 from flask import Flask, render_template, request, jsonify
@@ -17,14 +18,35 @@ app.secret_key = 'chave'
 # =====================================================================
 # ======================  CAMADA DE BACK-END  =========================
 # =====================================================================
-# Todas as funções abaixo são PLACEHOLDERS. Substitua o conteúdo delas
-# pela lógica real de integração com a Bloomberg (blpapi / xbbg / etc)
-# e com o banco de dados (SQLite, Postgres, etc).
-#
-# O contrato (parâmetros de entrada e formato de retorno) de cada função
-# já está pronto para o front-end funcionar. Mantenha os mesmos formatos
-# de retorno ao implementar a lógica real, ou ajuste o front-end junto.
-# =====================================================================
+
+def garantir_dim_date(conn, dt_obj):
+    date_id = int(dt_obj.strftime('%Y%m%d'))
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR IGNORE INTO dim_date (date_id, full_date, year, month, quarter, day_of_week)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (
+        date_id, dt_obj.strftime('%Y-%m-%d'), dt_obj.year, dt_obj.month,
+        (dt_obj.month - 1) // 3 + 1, dt_obj.weekday() + 1
+    ))
+    conn.commit()
+    return date_id
+
+def garantir_dim_date_range(conn, datas):
+    ids = {}
+    for dt_obj in datas:
+        date_id = int(dt_obj.strftime('%Y%m%d'))
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR IGNORE INTO dim_date (date_id, full_date, year, month, quarter, day_of_week)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            date_id, dt_obj.strftime('%Y-%m-%d'), dt_obj.year, dt_obj.month,
+            (dt_obj.month - 1) // 3 + 1, dt_obj.weekday() + 1
+        ))
+        conn.commit()
+        ids[dt_obj.strftime('%Y-%m-%d')] = date_id
+    return ids
 
 def bloomberg_consultar_ativo(bloomberg_id):
     """
@@ -162,7 +184,7 @@ def db_listar_ativos_resumo():
 
     conn = sqlite3.connect(DB_PATH)
     try:
-        df = pd.read_sql("SELECT bbg_id, ticker FROM dim_security", conn)
+        df = pd.read_sql("SELECT bbg_id, ticker, coupon, maturity, issuer FROM dim_security", conn)
     except Exception as e:
         print(f"Erro ao listar ativos do banco: {e}")
         return []
@@ -173,7 +195,17 @@ def db_listar_ativos_resumo():
     for _, row in df.iterrows():
         bbg_id = row['bbg_id']
         ticker = row['ticker'] or ''
-        label = f"{bbg_id} - {ticker}" if ticker else bbg_id
+        coupon = row['coupon'] or ''
+        maturity = row['maturity'] or ''
+        issuer = row['issuer'] or ''
+
+        if maturity and isinstance(maturity, str):
+            try:
+                maturity = pd.to_datetime(maturity).strftime('%d/%m/%Y')
+            except Exception:
+                pass
+
+        label = f"{ticker} {coupon} {maturity} - {issuer}" if ticker else bbg_id
         resumo.append({"bbg_id": bbg_id, "label": label})
     
     return resumo
@@ -335,32 +367,387 @@ def db_atualizar_ativo(dados):
     return {"sucesso": True, "mensagem": f"Ativo {dados.get('bbg_id')} atualizado com sucesso."}
 
 
-def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inicial, data_final):
+def bloomberg_fill_prev(
+    df,
+    date_col="date",
+    value_col="value",
+    group_cols=("ticker", "field"),
+    freq="D",
+):
     """
-    ...
+    Reproduz o comportamento do BQL fill=PREV.
+
+    Parâmetros
+    ----------
+    df : DataFrame
+        DataFrame no formato longo.
+    date_col : str
+        Nome da coluna de datas.
+    value_col : str
+        Nome da coluna de valores.
+    group_cols : tuple
+        Colunas que identificam cada série.
+    freq : str
+        Frequência do calendário ('D', 'B', etc.)
+
+    Retorna
+    -------
+    DataFrame
+        Mesmo formato do original, porém com as datas faltantes inseridas
+        e preenchidas pelo último valor disponível.
+    """
+
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    resultado = []
+
+    for chave, grupo in df.groupby(list(group_cols)):
+        grupo = grupo.sort_values(date_col)
+
+        idx = pd.date_range(
+            grupo[date_col].min(),
+            grupo[date_col].max(),
+            freq=freq
+        )
+
+        g = (
+            grupo
+            .set_index(date_col)
+            .reindex(idx)
+        )
+
+        # recoloca as colunas de agrupamento
+        if not isinstance(chave, tuple):
+            chave = (chave,)
+
+        for col, valor in zip(group_cols, chave):
+            g[col] = valor
+
+        g[value_col] = g[value_col].ffill()
+
+        g = (
+            g
+            .reset_index()
+            .rename(columns={"index": date_col})
+        )
+
+        resultado.append(g)
+
+    return (
+        pd.concat(resultado, ignore_index=True)
+        [list(group_cols) + [date_col, value_col]]
+    )
+
+
+def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
+    """
+    Preenchimento em lote — Tipo 1 (Preço e Yield).
+
     Parâmetros:
-        tipo_preenchimento (str): qual das sub-abas disparou a chamada
-            ("tipo1", "tipo2" ou "tipo3"). Use isso para rotear para a
-            lógica/tabelas corretas de cada tipo de preenchimento.
         lista_ativo_ids (list[str])
         data_inicial (str): "YYYY-MM-DD"
         data_final (str): "YYYY-MM-DD"
-    ...
+
+    Retorno esperado (dict):
+        {
+            "sucesso": bool,
+            "mensagem": str,
+            "detalhes": [{"id": str, "status": "ok"/"erro", "mensagem": str}, ...]
+        }
     """
-    print(tipo_preenchimento)
-    print(lista_ativo_ids)
-    print(data_inicial)
-    print(data_final)
-    # --- PLACEHOLDER ---
+    
+    if not isinstance(data_inicial, datetime) and not isinstance(data_inicial, date):
+        data_inicial = datetime.strptime(data_inicial, "%Y-%m-%d").date()
+    if not isinstance(data_final, datetime) and not isinstance(data_final, date):
+        data_final = datetime.strptime(data_final, "%Y-%m-%d").date()
+
+    datas = pd.date_range(start=data_inicial, end=data_final).to_pydatetime().tolist()
+    conn = sqlite3.connect(DB_PATH)
+    ids_map = garantir_dim_date_range(conn, datas)
+
+    try:
+        df_bdh = blp.bdh(
+            tickers=lista_ativo_ids, flds=['PX_MID', 'YLD_YTM_MID'],
+            start_date=data_inicial, end_date=data_final, Per='D', Fill='P'
+        )
+        df_bdh = bloomberg_fill_prev(df_bdh)
+
+        if 'field' in df_bdh.columns and 'value' in df_bdh.columns:
+            df_bdh = df_bdh.pivot(index=['ticker', 'date'], columns='field', values='value').reset_index()
+
+        for col in ['PX_MID', 'YLD_YTM_MID']:
+            if col not in df_bdh.columns:
+                df_bdh[col] = None
+            df_bdh[col] = pd.to_numeric(df_bdh[col], errors='coerce')
+
+        tickers_solicitados = set(lista_ativo_ids)
+        tickers_retornados = set(df_bdh['ticker'].unique())
+    
+        tickers_faltantes = sorted(
+            tickers_solicitados - tickers_retornados
+        )
+
+        df_bdh.rename(columns={
+            'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id'
+        }, inplace=True)
+    
+        df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+        df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
+        df_fact['date_id'] = df_fact['date'].apply(lambda x: ids_map[x.strftime("%Y-%m-%d")])
+        
+        cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid']
+        df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
+    
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid)
+            SELECT asset_id, date_id, price_mid, ytm_mid FROM fact_pricing_temp
+        ''')
+        cursor.execute('DROP TABLE fact_pricing_temp')
+        conn.commit()
+    except Exception as e:
+        print(f"Erro ao preencher preço e yield: {e}")
+        return {
+            "sucesso": False,
+            "mensagem": f"Erro ao preencher preço e yield: {e}",
+            "detalhes": [
+                {"id": ativo_id, "status": "erro", "mensagem": str(e)}
+                for ativo_id in lista_ativo_ids
+            ],
+        }
+    finally:
+        conn.close()
+
     detalhes = [
-        {"id": ativo_id, "status": "ok", "mensagem": f"[{tipo_preenchimento}] Tabelas preenchidas."}
+        {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield preenchidos."}
+        if ativo_id not in tickers_faltantes else
+        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes."}
         for ativo_id in lista_ativo_ids
     ]
     return {
         "sucesso": True,
-        "mensagem": f"Processamento ({tipo_preenchimento}) concluído para {len(lista_ativo_ids)} ativo(s).",
+        "mensagem": f"Preço e Yield concluído para {len(lista_ativo_ids)} ativo(s).",
         "detalhes": detalhes,
     }
+
+
+def preencher_tipo2(lista_ativo_ids, data_inicial, data_final):
+    """
+    Preenchimento em lote — Tipo 2 (Holders).
+
+    Parâmetros e retorno: mesmo formato de preencher_tipo1.
+    """
+    # --- PLACEHOLDER ---
+    print(f"[tipo2] ativos={lista_ativo_ids} inicio={data_inicial} fim={data_final}")
+    detalhes = [
+        {"id": ativo_id, "status": "ok", "mensagem": "Holders preenchidos."}
+        for ativo_id in lista_ativo_ids
+    ]
+    return {
+        "sucesso": True,
+        "mensagem": f"Holders concluído para {len(lista_ativo_ids)} ativo(s).",
+        "detalhes": detalhes,
+    }
+
+
+def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
+    """
+    Preenchimento em lote — Tipo 3 (Volume).
+
+    Parâmetros e retorno: mesmo formato de preencher_tipo1.
+    """
+    # --- PLACEHOLDER ---
+    print(f"[tipo3] ativos={lista_ativo_ids} inicio={data_inicial} fim={data_final}")
+    detalhes = [
+        {"id": ativo_id, "status": "ok", "mensagem": "Volume preenchido."}
+        for ativo_id in lista_ativo_ids
+    ]
+    return {
+        "sucesso": True,
+        "mensagem": f"Volume concluído para {len(lista_ativo_ids)} ativo(s).",
+        "detalhes": detalhes,
+    }
+
+
+def preencher_bdp(lista_ativo_ids):
+    """
+    Preenchimento em lote — Dados BDP (referência estática da Bloomberg).
+    Não usa período: BDP traz o dado "atual", não uma série histórica.
+
+    Parâmetros:
+        lista_ativo_ids (list[str])
+
+    Retorno esperado (dict): mesmo formato de preencher_tipo1.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX', 'z_sprd_mid']
+    date_id = garantir_dim_date(conn, datetime.now().date())
+    collected_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        df_bdp = blp.bdp(lista_ativo_ids, flds=campos_bdp)
+
+        if df_bdp.empty:
+            print("Retorno vazio da Bloomberg. Nada a gravar em fact_bdp.")
+            return {
+                "sucesso": False,
+                "mensagem": "Retorno vazio da Bloomberg. Nada a gravar em fact_bdp.",
+                "detalhes": [
+                    {"id": ativo_id, "status": "erro", "mensagem": "Sem dados."}
+                    for ativo_id in lista_ativo_ids
+                ],
+            }
+
+        if 'field' in df_bdp.columns and 'value' in df_bdp.columns:
+            df_bdp = df_bdp.pivot(index='ticker', columns='field', values='value').reset_index()
+        else:
+            df_bdp = df_bdp.reset_index().rename(columns={'index': 'ticker'})
+
+        for col in campos_bdp:
+            if col not in df_bdp.columns:
+                df_bdp[col] = None
+
+        df_bdp['AMT_OUTSTANDING'] = pd.to_numeric(df_bdp['AMT_OUTSTANDING'], errors='coerce')
+        df_bdp['MTY_DUR_MID'] = pd.to_numeric(df_bdp['MTY_DUR_MID'], errors='coerce')
+        df_bdp['YLD_YTC_MID'] = pd.to_numeric(df_bdp['YLD_YTC_MID'], errors='coerce')
+        df_bdp['NXT_CALL_PX'] = pd.to_numeric(df_bdp['NXT_CALL_PX'], errors='coerce')
+        df_bdp['z_sprd_mid'] = pd.to_numeric(df_bdp['z_sprd_mid'], errors='coerce')
+
+        df_bdp.rename(columns={
+            'ticker': 'bbg_id', 'AMT_OUTSTANDING': 'amt_outstanding', 'MTY_DUR_MID': 'duration_mid',
+            'RTG_MOODY': 'rating_moody', 'RTG_SP_LONG': 'rating_sp', 'RTG_FITCH': 'rating_fitch', 'BB_COMPOSITE': 'bb_composite',
+            'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price', 'z_sprd_mid': 'z_spread'
+        }, inplace=True)
+
+        df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+        df_fact = df_bdp.merge(df_assets, on='bbg_id', how='inner')
+        df_fact['date_id'] = date_id
+        df_fact['collected_at'] = collected_at
+
+        cols = ['asset_id', 'date_id', 'collected_at', 'duration_mid', 'amt_outstanding',
+                'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price', 'z_spread']
+        df_fact[cols].to_sql('fact_bdp_temp', conn, if_exists='replace', index=False)
+
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO fact_bdp
+            (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread)
+            SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread
+            FROM fact_bdp_temp
+        ''')
+        cursor.execute('DROP TABLE fact_bdp_temp')
+        conn.commit()
+    except Exception as e:
+        print(f"Erro ao preencher dados BDP: {e}")
+        return {
+            "sucesso": False,
+            "mensagem": f"Erro ao preencher dados BDP: {e}",
+            "detalhes": [
+                {"id": ativo_id, "status": "erro", "mensagem": str(e)}
+                for ativo_id in lista_ativo_ids
+            ],
+        }
+    finally:
+        conn.close()
+
+    detalhes = [
+        {"id": ativo_id, "status": "ok", "mensagem": "Dados BDP atualizados."}
+        for ativo_id in lista_ativo_ids
+    ]
+    return {
+        "sucesso": True,
+        "mensagem": f"Dados BDP concluído para {len(lista_ativo_ids)} ativo(s).",
+        "detalhes": detalhes,
+    }
+
+
+# Mapa usado pela orquestradora para rotear cada "tipo_preenchimento"
+# recebido do front para a função placeholder correspondente.
+# Para adicionar um novo tipo de preenchimento: crie a função acima e
+# registre-a aqui — a rota e o restante do fluxo não precisam mudar.
+FUNCOES_PREENCHIMENTO = {
+    "tipo1": lambda ids, di, df: preencher_tipo1(ids, di, df),
+    "tipo2": lambda ids, di, df: preencher_tipo2(ids, di, df),
+    "tipo3": lambda ids, di, df: preencher_tipo3(ids, di, df),
+    "bdp": lambda ids, di, df: preencher_bdp(ids),  # BDP ignora datas
+}
+
+
+def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inicial, data_final):
+    """
+    Orquestradora do preenchimento em lote (Aba 3).
+
+    Roteia para a função placeholder correta com base em tipo_preenchimento:
+        "tipo1", "tipo2", "tipo3" -> preenchem uma tabela cada, individualmente
+        "todos"                  -> roda tipo1, tipo2 e tipo3 em sequência,
+                                     usando os MESMOS ativos e MESMAS datas.
+                                     Se um deles falhar, os outros continuam
+                                     rodando normalmente (falha isolada).
+        "bdp"                    -> preenche a tabela de dados BDP; não usa
+                                     data_inicial/data_final.
+
+    Parâmetros:
+        tipo_preenchimento (str): "tipo1" | "tipo2" | "tipo3" | "todos" | "bdp"
+        lista_ativo_ids (list[str])
+        data_inicial (str ou None): "YYYY-MM-DD"
+        data_final (str ou None): "YYYY-MM-DD"
+
+    Retorno esperado (dict):
+        {
+            "sucesso": bool,
+            "mensagem": str,
+            "detalhes": [{"id": str, "status": "ok"/"erro", "mensagem": str}, ...]
+        }
+    """
+    if tipo_preenchimento == "todos":
+        mensagens = []
+        detalhes_agregados = []
+        sucesso_geral = True
+
+        for sub_tipo in ("tipo1", "tipo2", "tipo3"):
+            try:
+                resultado = FUNCOES_PREENCHIMENTO[sub_tipo](lista_ativo_ids, data_inicial, data_final)
+                mensagens.append(resultado["mensagem"])
+                detalhes_agregados.extend(resultado["detalhes"])
+                if not resultado["sucesso"]:
+                    sucesso_geral = False
+            except Exception as e:
+                # Falha isolada: registra o erro deste sub_tipo para cada
+                # ativo e segue para o próximo tipo, sem interromper o lote.
+                print(f"Erro ao processar '{sub_tipo}': {e}")
+                sucesso_geral = False
+                mensagens.append(f"{sub_tipo}: falhou ({e})")
+                detalhes_agregados.extend([
+                    {"id": ativo_id, "status": "erro", "mensagem": f"[{sub_tipo}] Falha: {e}"}
+                    for ativo_id in lista_ativo_ids
+                ])
+
+        return {
+            "sucesso": sucesso_geral,
+            "mensagem": " | ".join(mensagens),
+            "detalhes": detalhes_agregados,
+        }
+
+    funcao = FUNCOES_PREENCHIMENTO.get(tipo_preenchimento)
+    if funcao is None:
+        return {
+            "sucesso": False,
+            "mensagem": f"Tipo de preenchimento desconhecido: {tipo_preenchimento}",
+            "detalhes": [],
+        }
+
+    try:
+        return funcao(lista_ativo_ids, data_inicial, data_final)
+    except Exception as e:
+        print(f"Erro ao processar '{tipo_preenchimento}': {e}")
+        return {
+            "sucesso": False,
+            "mensagem": f"Erro ao processar {tipo_preenchimento}: {e}",
+            "detalhes": [
+                {"id": ativo_id, "status": "erro", "mensagem": str(e)}
+                for ativo_id in lista_ativo_ids
+            ],
+        }
 
 
 # =====================================================================

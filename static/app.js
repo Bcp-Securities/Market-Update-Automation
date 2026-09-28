@@ -368,7 +368,11 @@ function initAbaEditar(listaAtivos) {
 // Para adicionar um novo tipo: (1) copie um bloco de sub-aba no HTML
 // trocando "tipoN", (2) adicione o botão em .subtab-bar, (3) adicione
 // uma entrada aqui.
-const TIPOS_LOTE = ['tipo1', 'tipo2', 'tipo3'];
+const TIPOS_LOTE = ['todos', 'tipo1', 'tipo2', 'tipo3', 'bdp'];
+
+// Tipos cuja sub-aba NÃO tem campos de data (ex: BDP, que usa a
+// referência mais recente da Bloomberg em vez de uma série histórica).
+const TIPOS_SEM_DATA = ['bdp', 'tipo2'];
 
 function initSubTabsLote() {
     const buttons = document.querySelectorAll('.subtab-btn');
@@ -389,9 +393,11 @@ function initAbaLote(listaAtivos) {
     const choicesPorTipo = {};
 
     TIPOS_LOTE.forEach((tipo) => {
+        const usaData = !TIPOS_SEM_DATA.includes(tipo);
+
         const selectEl = document.getElementById(`select-lote-${tipo}`);
-        const dataInicialEl = document.getElementById(`data-inicial-${tipo}`);
-        const dataFinalEl = document.getElementById(`data-final-${tipo}`);
+        const dataInicialEl = usaData ? document.getElementById(`data-inicial-${tipo}`) : null;
+        const dataFinalEl = usaData ? document.getElementById(`data-final-${tipo}`) : null;
         const btnProcessar = document.querySelector(`.btn-processar-lote[data-lote-tipo="${tipo}"]`);
         const feedback = document.querySelector(`.lote-feedback[data-lote-tipo="${tipo}"]`);
         const resultado = document.querySelector(`.lote-resultado[data-lote-tipo="${tipo}"]`);
@@ -412,28 +418,30 @@ function initAbaLote(listaAtivos) {
 
         btnProcessar.addEventListener('click', async () => {
             const selecionados = choices.getValue(true);
-            const dataInicial = dataInicialEl.value;
-            const dataFinal = dataFinalEl.value;
+            const dataInicial = usaData ? dataInicialEl.value : null;
+            const dataFinal = usaData ? dataFinalEl.value : null;
 
             // ---------------- Validações ----------------
             if (!selecionados.length) {
                 setFieldHint(feedback, 'Selecione ao menos um ativo.', 'error');
                 return;
             }
-            if (!dataInicial) {
-                setFieldHint(feedback, 'Informe a data inicial.', 'error');
-                dataInicialEl.focus();
-                return;
-            }
-            if (!dataFinal) {
-                setFieldHint(feedback, 'Informe a data final.', 'error');
-                dataFinalEl.focus();
-                return;
-            }
-            if (dataInicial > dataFinal) {
-                setFieldHint(feedback, 'A data inicial não pode ser posterior à data final.', 'error');
-                dataInicialEl.focus();
-                return;
+            if (usaData) {
+                if (!dataInicial) {
+                    setFieldHint(feedback, 'Informe a data inicial.', 'error');
+                    dataInicialEl.focus();
+                    return;
+                }
+                if (!dataFinal) {
+                    setFieldHint(feedback, 'Informe a data final.', 'error');
+                    dataFinalEl.focus();
+                    return;
+                }
+                if (dataInicial > dataFinal) {
+                    setFieldHint(feedback, 'A data inicial não pode ser posterior à data final.', 'error');
+                    dataInicialEl.focus();
+                    return;
+                }
             }
 
             // ---------------- Processamento ----------------
@@ -445,7 +453,7 @@ function initAbaLote(listaAtivos) {
                 const data = await apiRequest('/api/preencher-lote', {
                     method: 'POST',
                     body: JSON.stringify({
-                        tipo_preenchimento: tipo, // <- diz ao back-end qual dos 3 fluxos rodar
+                        tipo_preenchimento: tipo,
                         ativo_ids: selecionados,
                         data_inicial: dataInicial,
                         data_final: dataFinal,
@@ -457,16 +465,18 @@ function initAbaLote(listaAtivos) {
                     const li = document.createElement('li');
                     li.innerHTML = `
                         <span class="result-id">${item.id}</span>
-                        <span>${item.mensagem}</span>
-                        <span class="result-status ${item.status}">
-                            ${item.status === 'ok' ? 'OK' : 'ERRO'}
-                        </span>
+                        <div>
+                            <span>${item.mensagem}</span>
+                            <span class="result-status ${item.status}">
+                                ${item.status === 'ok' ? 'OK' : 'ERRO'}
+                            </span>
+                        </div>
                     `;
                     lista.appendChild(li);
                 });
 
                 resultado.hidden = false;
-                showToast(data.mensagem, 'success');
+                showToast(data.mensagem, data.sucesso ? 'success' : 'error');
             } catch (err) {
                 setFieldHint(feedback, err.message, 'error');
             } finally {
