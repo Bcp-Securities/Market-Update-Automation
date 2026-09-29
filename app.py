@@ -19,6 +19,114 @@ app.secret_key = 'chave'
 # ======================  CAMADA DE BACK-END  =========================
 # =====================================================================
 
+def bloomberg_fill_prev(
+    df,
+    date_col="date",
+    value_col="value",
+    group_cols=("ticker", "field"),
+    freq="D",
+):
+    """
+    Reproduz o comportamento do BQL fill=PREV.
+
+    Parâmetros
+    ----------
+    df : DataFrame
+        DataFrame no formato longo.
+    date_col : str
+        Nome da coluna de datas.
+    value_col : str
+        Nome da coluna de valores.
+    group_cols : tuple
+        Colunas que identificam cada série.
+    freq : str
+        Frequência do calendário ('D', 'B', etc.)
+
+    Retorna
+    -------
+    DataFrame
+        Mesmo formato do original, porém com as datas faltantes inseridas
+        e preenchidas pelo último valor disponível.
+    """
+
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+
+    resultado = []
+
+    for chave, grupo in df.groupby(list(group_cols)):
+        grupo = grupo.sort_values(date_col)
+
+        idx = pd.date_range(
+            grupo[date_col].min(),
+            grupo[date_col].max(),
+            freq=freq
+        )
+
+        g = (
+            grupo
+            .set_index(date_col)
+            .reindex(idx)
+        )
+
+        # recoloca as colunas de agrupamento
+        if not isinstance(chave, tuple):
+            chave = (chave,)
+
+        for col, valor in zip(group_cols, chave):
+            g[col] = valor
+
+        g[value_col] = g[value_col].ffill()
+
+        g = (
+            g
+            .reset_index()
+            .rename(columns={"index": date_col})
+        )
+
+        resultado.append(g)
+
+    return (
+        pd.concat(resultado, ignore_index=True)
+        [list(group_cols) + [date_col, value_col]]
+    )
+
+def bloomberg_fill_zero(
+    df,
+    date_col="date",
+    value_col="value",
+    group_cols=("ticker", "field"),
+    freq="D",
+):
+    """
+    Reproduz o shape contínuo de datas, mas preenche dias sem negociação com 0.
+    """
+    df = df.copy()
+    df[date_col] = pd.to_datetime(df[date_col])
+    resultado = []
+
+    for chave, grupo in df.groupby(list(group_cols)):
+        grupo = grupo.sort_values(date_col)
+        if grupo.empty: continue
+        
+        idx = pd.date_range(grupo[date_col].min(), grupo[date_col].max(), freq=freq)
+        g = grupo.set_index(date_col).reindex(idx)
+        
+        if not isinstance(chave, tuple):
+            chave = (chave,)
+        for col, valor in zip(group_cols, chave):
+            g[col] = valor
+
+        # Preenche os volumes faltantes com 0
+        g[value_col] = g[value_col].fillna(0)
+        g = g.reset_index().rename(columns={"index": date_col})
+        resultado.append(g)
+
+    if not resultado:
+        return pd.DataFrame(columns=list(group_cols) + [date_col, value_col])
+
+    return pd.concat(resultado, ignore_index=True)[list(group_cols) + [date_col, value_col]]
+
 def garantir_dim_date(conn, dt_obj):
     date_id = int(dt_obj.strftime('%Y%m%d'))
     cursor = conn.cursor()
@@ -367,78 +475,45 @@ def db_atualizar_ativo(dados):
     return {"sucesso": True, "mensagem": f"Ativo {dados.get('bbg_id')} atualizado com sucesso."}
 
 
-def bloomberg_fill_prev(
-    df,
-    date_col="date",
-    value_col="value",
-    group_cols=("ticker", "field"),
-    freq="D",
-):
+def obter_datas_existentes(conn, tabela_fato, bbg_id, data_inicial, data_final, series_type=None):
+    """Retorna um set() com as datas (datetime.date) que já existem no banco para o ativo e período."""
+    query = f"""
+        SELECT d.full_date 
+        FROM {tabela_fato} f
+        JOIN dim_security s ON f.asset_id = s.asset_id
+        JOIN dim_date d ON f.date_id = d.date_id
+        WHERE s.bbg_id = ? AND d.full_date BETWEEN ? AND ?
     """
-    Reproduz o comportamento do BQL fill=PREV.
+    params = [bbg_id, data_inicial.strftime('%Y-%m-%d'), data_final.strftime('%Y-%m-%d')]
+    
+    if series_type:
+        query += " AND f.series_type = ?"
+        params.append(series_type)
+        
+    df = pd.read_sql(query, conn, params=tuple(params))
+    return set(pd.to_datetime(df['full_date']).dt.date)
 
-    Parâmetros
-    ----------
-    df : DataFrame
-        DataFrame no formato longo.
-    date_col : str
-        Nome da coluna de datas.
-    value_col : str
-        Nome da coluna de valores.
-    group_cols : tuple
-        Colunas que identificam cada série.
-    freq : str
-        Frequência do calendário ('D', 'B', etc.)
+def calcular_fatias_faltantes(datas_existentes, data_inicial, data_final):
+    """Compara o período total com o que existe no banco e retorna fatias (inicio, fim) dos buracos."""
+    todas_datas = pd.date_range(start=data_inicial, end=data_final).date
+    faltantes = sorted(set(todas_datas) - datas_existentes)
 
-    Retorna
-    -------
-    DataFrame
-        Mesmo formato do original, porém com as datas faltantes inseridas
-        e preenchidas pelo último valor disponível.
-    """
-
-    df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col])
-
-    resultado = []
-
-    for chave, grupo in df.groupby(list(group_cols)):
-        grupo = grupo.sort_values(date_col)
-
-        idx = pd.date_range(
-            grupo[date_col].min(),
-            grupo[date_col].max(),
-            freq=freq
-        )
-
-        g = (
-            grupo
-            .set_index(date_col)
-            .reindex(idx)
-        )
-
-        # recoloca as colunas de agrupamento
-        if not isinstance(chave, tuple):
-            chave = (chave,)
-
-        for col, valor in zip(group_cols, chave):
-            g[col] = valor
-
-        g[value_col] = g[value_col].ffill()
-
-        g = (
-            g
-            .reset_index()
-            .rename(columns={"index": date_col})
-        )
-
-        resultado.append(g)
-
-    return (
-        pd.concat(resultado, ignore_index=True)
-        [list(group_cols) + [date_col, value_col]]
-    )
-
+    if not faltantes:
+        return []
+        
+    fatias = []
+    inicio = faltantes[0]
+    anterior = faltantes[0]
+    
+    for atual in faltantes[1:]:
+        # Se pular mais de 1 dia, quebra a fatia
+        if atual != anterior + timedelta(days=1):
+            fatias.append((inicio, anterior))
+            inicio = atual
+        anterior = atual
+        
+    fatias.append((inicio, anterior))
+    return fatias
 
 def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
     """
@@ -467,11 +542,53 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
     ids_map = garantir_dim_date_range(conn, datas)
 
     try:
-        df_bdh = blp.bdh(
-            tickers=lista_ativo_ids, flds=['PX_MID', 'YLD_YTM_MID'],
-            start_date=data_inicial, end_date=data_final, Per='D', Fill='P'
+        # 1. Mapeia fatias e datas faltantes por ativo
+        grupos_fatias = {}
+        tickers_solicitados = set(lista_ativo_ids)
+        faltantes_por_ativo = {} # Para o filtro final
+        
+        for ativo_id in lista_ativo_ids:
+            existentes = obter_datas_existentes(conn, 'fact_pricing', ativo_id, data_inicial, data_final)
+            faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
+            
+            if faltantes:
+                faltantes_por_ativo[ativo_id] = set(faltantes)
+                fatias = tuple(calcular_fatias_faltantes(existentes, data_inicial, data_final))
+                grupos_fatias.setdefault(fatias, []).append(ativo_id)
+            else:
+                tickers_solicitados.discard(ativo_id)
+
+        # 2. Chama a Bloomberg por fatias
+        frames_bdh = []
+        for fatias, tickers_grupo in grupos_fatias.items():
+            for dt_ini, dt_fim in fatias:
+                df_slice = blp.bdh(
+                    tickers=tickers_grupo, flds=['PX_MID', 'YLD_YTM_MID'],
+                    start_date=dt_ini, end_date=dt_fim, Per='D' # <-- Removido Fill='P'
+                )
+                if not df_slice.empty:
+                    frames_bdh.append(df_slice)
+
+        if not frames_bdh:
+            conn.close()
+            return {"sucesso": True, "mensagem": "Nenhum dado novo precisou ser baixado (banco atualizado).", "detalhes": []}
+
+        # 3. Concatena tudo
+        df_bdh_raw = pd.concat(frames_bdh, ignore_index=True)
+        
+        # 4. Aplica o ffill na série inteira e preenche os gaps 
+        df_bdh = bloomberg_fill_prev(df_bdh_raw)
+
+        # 5. Remove as datas que já existiam no banco ("erradas" após o ffill)
+        df_bdh['date_date'] = pd.to_datetime(df_bdh['date']).dt.date
+        df_bdh['filter_key'] = df_bdh['ticker'] + "_" + df_bdh['date_date'].astype(str)
+        
+        valid_keys = set(
+            f"{tck}_{dt}" 
+            for tck, faltantes in faltantes_por_ativo.items() 
+            for dt in faltantes
         )
-        df_bdh = bloomberg_fill_prev(df_bdh)
+        df_bdh = df_bdh[df_bdh['filter_key'].isin(valid_keys)].drop(columns=['date_date', 'filter_key'])
 
         if 'field' in df_bdh.columns and 'value' in df_bdh.columns:
             df_bdh = df_bdh.pivot(index=['ticker', 'date'], columns='field', values='value').reset_index()
@@ -498,7 +615,7 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         
         cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid']
         df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
-    
+
         cursor = conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid)
@@ -507,6 +624,7 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         cursor.execute('DROP TABLE fact_pricing_temp')
         conn.commit()
     except Exception as e:
+        conn.rollback()
         print(f"Erro ao preencher preço e yield: {e}")
         return {
             "sucesso": False,
@@ -532,20 +650,156 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
     }
 
 
-def preencher_tipo2(lista_ativo_ids, data_inicial, data_final):
+def preencher_tipo2(lista_ativo_ids):
     """
-    Preenchimento em lote — Tipo 2 (Holders).
+    Preenchimento em lote, Tipo 2 (Holders). Usa BDS, então não recebe datas.
 
-    Parâmetros e retorno: mesmo formato de preencher_tipo1.
+    Para cada ativo, consulta na Bloomberg os IDs bbg_id_regs e/ou
+    bbg_id_144a que estiverem preenchidos (o bbg_id "padrão" NÃO é usado).
+    Cada execução grava um novo snapshot em fact_holders, carimbado com o
+    date_id do dia da execução — histórico é acumulado, não sobrescrito
+    entre dias diferentes (dentro do mesmo dia, reprocessar substitui via
+    INSERT OR REPLACE, respeitando a PK da tabela).
+
+    Retorno: mesmo formato dos outros tipos.
     """
-    # --- PLACEHOLDER ---
-    print(f"[tipo2] ativos={lista_ativo_ids} inicio={data_inicial} fim={data_final}")
-    detalhes = [
-        {"id": ativo_id, "status": "ok", "mensagem": "Holders preenchidos."}
-        for ativo_id in lista_ativo_ids
+    ids_por_ativo = db_obter_ids_holders(lista_ativo_ids)
+    detalhes = []
+
+    conn = sqlite3.connect(DB_PATH)
+    date_id = garantir_dim_date(conn, datetime.now().date())
+    df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+
+    colunas_saida = [
+        "asset_id", "date_id", "holder_name", "holder_id",
+        "position_thousand", "position_change_thousand", "filing_date",
+        "filing_source", "insider_status", "percent_outstanding",
+        "institution_type", "metro_area", "country", "series_type",
     ]
+
+    try:
+        for ativo_id in lista_ativo_ids:
+            regs = ids_por_ativo[ativo_id]["bbg_id_regs"]
+            a144 = ids_por_ativo[ativo_id]["bbg_id_144a"]
+            ids_consulta = {}
+
+            if regs:
+                ids_consulta["RegS"] = regs
+            if a144:
+                ids_consulta["144A"] = a144
+
+            if not ids_consulta:
+                detalhes.append({"id": ativo_id, "status": "erro",
+                                 "mensagem": "Sem BBG ID RegS/144A cadastrado."})
+                continue
+
+            frames_ativo = []
+            erro_ativo = None
+
+            for tipo, id_consulta in ids_consulta.items():
+                try:
+                    print(f"[Holders] {ativo_id} -> consultando {tipo}: {id_consulta}")
+                    df = blp.bds(id_consulta, "ALL_HOLDERS_PUBLIC_FILINGS")
+                    df.columns = df.columns.str.strip()
+
+                    if df.empty:
+                        continue
+
+                    df = df.rename(columns={
+                        "Holder Name": "holder_name",
+                        "Holder Id": "holder_id",
+                        "Position": "position_thousand",
+                        "Position Change": "position_change_thousand",
+                        "Filing Date": "filing_date",
+                        "Filing Source": "filing_source",
+                        "Insider Status": "insider_status",
+                        "Percent Outstanding": "percent_outstanding",
+                        "Institution Type": "institution_type",
+                        "Metro Area": "metro_area",
+                        "Country": "country",
+                    })
+                    df["series_type"] = tipo
+                    df["bbg_id"] = ativo_id
+                    frames_ativo.append(df)
+                except Exception as e:
+                    # Falha isolada por sub-id (RegS/144A): não derruba o
+                    # outro sub-id do mesmo ativo, nem os demais ativos.
+                    print(f"Erro ao consultar Holders ({tipo}) para {ativo_id}: {e}")
+                    erro_ativo = str(e)
+
+            if not frames_ativo:
+                if erro_ativo:
+                    detalhes.append({"id": ativo_id, "status": "erro",
+                                     "mensagem": f"Falha ao consultar Holders: {erro_ativo}"})
+                else:
+                    detalhes.append({"id": ativo_id, "status": "erro",
+                                     "mensagem": "Nenhum holder retornado pela Bloomberg."})
+                continue
+
+            df_ativo = pd.concat(frames_ativo, ignore_index=True)
+
+            # Garante presença de todas as colunas esperadas antes de tipar
+            for col in ["holder_name", "holder_id", "position_thousand",
+                        "position_change_thousand", "filing_date", "filing_source",
+                        "insider_status", "percent_outstanding", "institution_type",
+                        "metro_area", "country"]:
+                if col not in df_ativo.columns:
+                    df_ativo[col] = None
+
+            df_ativo["position_thousand"] = pd.to_numeric(df_ativo["position_thousand"], errors="coerce")
+            df_ativo["position_change_thousand"] = pd.to_numeric(df_ativo["position_change_thousand"], errors="coerce")
+            df_ativo["percent_outstanding"] = pd.to_numeric(df_ativo["percent_outstanding"], errors="coerce")
+            df_ativo["filing_date"] = pd.to_datetime(df_ativo["filing_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+
+            # holder_id é parte da PK: linha sem holder_id não pode ser gravada
+            antes = len(df_ativo)
+            df_ativo = df_ativo.dropna(subset=["holder_id"])
+            descartadas = antes - len(df_ativo)
+            if descartadas:
+                print(f"[Holders] {ativo_id}: {descartadas} linha(s) sem holder_id descartada(s).")
+
+            if df_ativo.empty:
+                detalhes.append({"id": ativo_id, "status": "erro",
+                                 "mensagem": "Holders retornados sem holder_id válido."})
+                continue
+
+            df_ativo = df_ativo.merge(df_assets, on="bbg_id", how="inner")
+            if df_ativo.empty:
+                detalhes.append({"id": ativo_id, "status": "erro",
+                                 "mensagem": "Ativo não encontrado em dim_security."})
+                continue
+
+            df_ativo["date_id"] = date_id
+
+            df_ativo[colunas_saida].to_sql("fact_holders_temp", conn, if_exists="replace", index=False)
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                INSERT OR REPLACE INTO fact_holders ({", ".join(colunas_saida)})
+                SELECT {", ".join(colunas_saida)} FROM fact_holders_temp
+            ''')
+            cursor.execute("DROP TABLE fact_holders_temp")
+            conn.commit()
+
+            detalhes.append({"id": ativo_id, "status": "ok",
+                             "mensagem": f"{len(df_ativo)} holder(s) gravado(s) "
+                                         f"({len(ids_consulta)} ID(s) consultado(s))."})
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro geral ao preencher holders: {e}")
+        return {
+            "sucesso": False,
+            "mensagem": f"Erro ao preencher holders: {e}",
+            "detalhes": detalhes or [
+                {"id": ativo_id, "status": "erro", "mensagem": str(e)}
+                for ativo_id in lista_ativo_ids
+            ],
+        }
+    finally:
+        conn.close()
+
+    sucesso = all(d["status"] == "ok" for d in detalhes)
     return {
-        "sucesso": True,
+        "sucesso": sucesso,
         "mensagem": f"Holders concluído para {len(lista_ativo_ids)} ativo(s).",
         "detalhes": detalhes,
     }
@@ -555,16 +809,162 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
     """
     Preenchimento em lote — Tipo 3 (Volume).
 
-    Parâmetros e retorno: mesmo formato de preencher_tipo1.
+    Assim como Holders, o volume é buscado usando bbg_id_regs e/ou
+    bbg_id_144a de cada ativo (o bbg_id "padrão" NÃO é usado), com uma
+    chamada BDH por sub-id. Cada linha recebe volume_partial=1 se sua data
+    for hoje (pregão ainda não fechado) e 0 caso contrário; como a PK de
+    fact_trading_volume é (asset_id, date_id, series_type), reprocessar uma
+    data marcada como parcial em execução futura sobrescreve a linha antiga
+    com o valor final e volume_partial=0.
+
+    Parâmetros:
+        lista_ativo_ids (list[str])
+        data_inicial (str): "YYYY-MM-DD"
+        data_final (str): "YYYY-MM-DD"
+
+    Retorno esperado (dict): mesmo formato dos outros tipos.
     """
-    # --- PLACEHOLDER ---
-    print(f"[tipo3] ativos={lista_ativo_ids} inicio={data_inicial} fim={data_final}")
-    detalhes = [
-        {"id": ativo_id, "status": "ok", "mensagem": "Volume preenchido."}
-        for ativo_id in lista_ativo_ids
-    ]
+    if not isinstance(data_inicial, datetime) and not isinstance(data_inicial, date):
+        data_inicial = datetime.strptime(data_inicial, "%Y-%m-%d").date()
+    if not isinstance(data_final, datetime) and not isinstance(data_final, date):
+        data_final = datetime.strptime(data_final, "%Y-%m-%d").date()
+
+    hoje = datetime.now().date()
+    datas = pd.date_range(start=data_inicial, end=data_final).to_pydatetime().tolist()
+
+    ids_por_ativo = db_obter_ids_holders(lista_ativo_ids)
+    detalhes = []
+
+    conn = sqlite3.connect(DB_PATH)
+    ids_map = garantir_dim_date_range(conn, datas)
+    df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
+
+    colunas_saida = ['asset_id', 'date_id', 'trading_volume_thousands', 'volume_partial', 'series_type']
+
+    try:
+        for ativo_id in lista_ativo_ids:
+            regs = ids_por_ativo[ativo_id]["bbg_id_regs"]
+            a144 = ids_por_ativo[ativo_id]["bbg_id_144a"]
+            ids_consulta = {}
+
+            if regs:
+                ids_consulta["RegS"] = regs
+            if a144:
+                ids_consulta["144A"] = a144
+
+            if not ids_consulta:
+                detalhes.append({"id": ativo_id, "status": "erro",
+                                 "mensagem": "Sem BBG ID RegS/144A cadastrado."})
+                continue
+
+            frames_ativo = []
+            erro_ativo = None
+            sub_ids_sem_dado = []
+
+            for tipo, id_consulta in ids_consulta.items():
+                try:
+                    print(f"[Volume] {ativo_id} -> consultando {tipo}: {id_consulta}")
+                    
+                    existentes = obter_datas_existentes(conn, 'fact_trading_volume', ativo_id, data_inicial, data_final, series_type=tipo)
+                    faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
+                    
+                    if not faltantes:
+                        continue # Pula se não falta nada
+                        
+                    fatias = calcular_fatias_faltantes(existentes, data_inicial, data_final)
+                    frames_fatias = []
+                    
+                    for dt_ini, dt_fim in fatias:
+                        df_slice = blp.bdh(
+                            tickers=[id_consulta], flds=['PX_VOLUME'],
+                            start_date=dt_ini, end_date=dt_fim, Per='D'
+                        )
+                        if not df_slice.empty:
+                            frames_fatias.append(df_slice)
+                            
+                    if not frames_fatias:
+                        if tipo not in sub_ids_sem_dado: sub_ids_sem_dado.append(tipo)
+                        continue
+
+                    # Concatena as fatias brutas
+                    df_raw = pd.concat(frames_fatias, ignore_index=True)
+                    
+                    # Roda o fill zero em todo o intervalo
+                    df = bloomberg_fill_zero(df_raw)
+                    
+                    # Filtra apenas o que é faltante usando a variável já calculada
+                    df['date_date'] = pd.to_datetime(df['date']).dt.date
+                    df = df[df['date_date'].isin(faltantes)].drop(columns=['date_date'])
+                    
+                    if 'field' in df.columns and 'value' in df.columns:
+                        df = df.pivot(index=['ticker', 'date'], columns='field', values='value').reset_index()
+
+                    if 'PX_VOLUME' not in df.columns:
+                        df['PX_VOLUME'] = None
+                    df['PX_VOLUME'] = pd.to_numeric(df['PX_VOLUME'], errors='coerce')
+
+                    df.rename(columns={'PX_VOLUME': 'trading_volume_thousands'}, inplace=True)
+                    df['series_type'] = tipo
+                    df['bbg_id'] = ativo_id
+                    print(df)
+                    frames_ativo.append(df)
+                except Exception as e:
+                    # Falha isolada por sub-id (RegS/144A): não derruba o
+                    # outro sub-id do mesmo ativo, nem os demais ativos.
+                    print(f"Erro ao consultar Volume ({tipo}) para {ativo_id}: {e}")
+                    erro_ativo = str(e)
+
+            if not frames_ativo:
+                if erro_ativo:
+                    detalhes.append({"id": ativo_id, "status": "erro",
+                                     "mensagem": f"Falha ao consultar Volume: {erro_ativo}"})
+                else:
+                    detalhes.append({"id": ativo_id, "status": "erro",
+                                     "mensagem": "Nenhum volume retornado pela Bloomberg."})
+                continue
+
+            df_ativo = pd.concat(frames_ativo, ignore_index=True)
+            df_ativo = df_ativo.merge(df_assets, on='bbg_id', how='inner')
+            if df_ativo.empty:
+                detalhes.append({"id": ativo_id, "status": "erro",
+                                 "mensagem": "Ativo não encontrado em dim_security."})
+                continue
+
+            df_ativo['date_id'] = df_ativo['date'].apply(lambda x: ids_map[x.strftime("%Y-%m-%d")])
+            df_ativo['volume_partial'] = (df_ativo['date'].dt.date == hoje).astype(int)
+
+            df_ativo[colunas_saida].to_sql('fact_trading_volume_temp', conn, if_exists='replace', index=False)
+            cursor = conn.cursor()
+            cursor.execute(f'''
+                INSERT OR REPLACE INTO fact_trading_volume ({", ".join(colunas_saida)})
+                SELECT {", ".join(colunas_saida)} FROM fact_trading_volume_temp
+            ''')
+            cursor.execute('DROP TABLE fact_trading_volume_temp')
+            conn.commit()
+
+            if sub_ids_sem_dado:
+                detalhes.append({"id": ativo_id, "status": "ok",
+                                 "mensagem": f"Volume gravado. Sem dados para: {', '.join(sub_ids_sem_dado)}."})
+            else:
+                detalhes.append({"id": ativo_id, "status": "ok",
+                                 "mensagem": f"Volume preenchido ({len(ids_consulta)} ID(s) consultado(s))."})
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro geral ao preencher volume: {e}")
+        return {
+            "sucesso": False,
+            "mensagem": f"Erro ao preencher volume: {e}",
+            "detalhes": detalhes or [
+                {"id": ativo_id, "status": "erro", "mensagem": str(e)}
+                for ativo_id in lista_ativo_ids
+            ],
+        }
+    finally:
+        conn.close()
+
+    sucesso = all(d["status"] == "ok" for d in detalhes)
     return {
-        "sucesso": True,
+        "sucesso": sucesso,
         "mensagem": f"Volume concluído para {len(lista_ativo_ids)} ativo(s).",
         "detalhes": detalhes,
     }
@@ -661,19 +1061,162 @@ def preencher_bdp(lista_ativo_ids):
     }
 
 
+# Tipos que compõem "todos", na ordem em que serão executados.
+SUBTIPOS_TODOS = ("tipo1", "tipo2", "tipo3", "bdp")
+
+# Tipos que precisam de período. Os demais ignoram data_inicial/data_final.
+# (Manter em sincronia com TIPOS_COM_DATA no app.js)
+TIPOS_QUE_USAM_DATA = {"tipo1", "tipo3"}
+
+
+def _valor_preenchido(valor):
+    """True se for string não vazia. Trata None, NaN e '' como vazio."""
+    return isinstance(valor, str) and valor.strip() != ""
+
+
+def db_obter_ids_holders(lista_ativo_ids):
+    """
+    Lê bbg_id_regs e bbg_id_144a de cada ativo.
+
+    Retorno (dict): {bbg_id: {"bbg_id_regs": str|None, "bbg_id_144a": str|None}}
+    Contém TODOS os ids pedidos; ids inexistentes no banco vêm com ambos None.
+    """
+    resultado = {a: {"bbg_id_regs": None, "bbg_id_144a": None} for a in lista_ativo_ids}
+    if not lista_ativo_ids:
+        return resultado
+
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        marcadores = ",".join("?" for _ in lista_ativo_ids)
+        df = pd.read_sql(
+            f"SELECT bbg_id, bbg_id_regs, bbg_id_144a FROM dim_security WHERE bbg_id IN ({marcadores})",
+            conn,
+            params=tuple(lista_ativo_ids),
+        )
+    finally:
+        conn.close()
+
+    for _, row in df.iterrows():
+        resultado[row["bbg_id"]] = {
+            "bbg_id_regs": row["bbg_id_regs"].strip() if _valor_preenchido(row["bbg_id_regs"]) else None,
+            "bbg_id_144a": row["bbg_id_144a"].strip() if _valor_preenchido(row["bbg_id_144a"]) else None,
+        }
+    return resultado
+
+
+def holders_avaliar_ids(lista_ativo_ids):
+    """
+    Classifica cada ativo em um cenário e devolve o status global, onde
+    prevalece o cenário mais restritivo entre todos os ativos.
+
+    Cenário por ativo:
+        1 -> nenhum dos dois IDs preenchido
+        2 -> apenas um preenchido
+        3 -> os dois preenchidos
+
+    Status global:
+        "bloqueado"  -> algum ativo no cenário 1
+        "incompleto" -> nenhum no 1, mas algum no 2
+        "ok"         -> todos no cenário 3
+
+    Retorno:
+        {
+            "status": "ok" | "incompleto" | "bloqueado",
+            "ativos": [
+                {"bbg_id": str, "bbg_id_regs": str|None,
+                 "bbg_id_144a": str|None, "cenario": 1|2|3},
+                ...
+            ]
+        }
+    """
+    ids_por_ativo = db_obter_ids_holders(lista_ativo_ids)
+
+    ativos = []
+    for bbg_id in lista_ativo_ids:
+        regs = ids_por_ativo[bbg_id]["bbg_id_regs"]
+        a144 = ids_por_ativo[bbg_id]["bbg_id_144a"]
+        preenchidos = sum(1 for v in (regs, a144) if v)
+        ativos.append({
+            "bbg_id": bbg_id,
+            "bbg_id_regs": regs,
+            "bbg_id_144a": a144,
+            "cenario": {0: 1, 1: 2, 2: 3}[preenchidos],
+        })
+
+    cenarios = {a["cenario"] for a in ativos}
+    if 1 in cenarios:
+        status = "bloqueado"
+    elif 2 in cenarios:
+        status = "incompleto"
+    else:
+        status = "ok"
+
+    return {"status": status, "ativos": ativos}
+
+
+def db_atualizar_ids_holders(correcoes):
+    """
+    Preenche IDs de Holders que estavam vazios (usado pelo formulário inline
+    da Aba 3). NUNCA sobrescreve um ID já preenchido; edição de valores
+    existentes continua sendo feita pela Aba 2.
+
+    Parâmetros:
+        correcoes (list[dict]): [{"bbg_id": str,
+                                  "bbg_id_regs": str (opcional),
+                                  "bbg_id_144a": str (opcional)}, ...]
+
+    Retorno: {"sucesso": bool, "mensagem": str}
+    """
+    conn = sqlite3.connect(DB_PATH)
+    atualizados = 0
+    try:
+        cursor = conn.cursor()
+        for c in correcoes:
+            bbg_id = c.get("bbg_id")
+            if not bbg_id:
+                continue
+
+            regs = str(c.get("bbg_id_regs") or "").strip()
+            a144 = str(c.get("bbg_id_144a") or "").strip()
+
+            if regs:
+                cursor.execute(
+                    "UPDATE dim_security SET bbg_id_regs = ? "
+                    "WHERE bbg_id = ? AND (bbg_id_regs IS NULL OR TRIM(bbg_id_regs) = '')",
+                    (regs, bbg_id),
+                )
+                atualizados += cursor.rowcount
+            if a144:
+                cursor.execute(
+                    "UPDATE dim_security SET bbg_id_144a = ? "
+                    "WHERE bbg_id = ? AND (bbg_id_144a IS NULL OR TRIM(bbg_id_144a) = '')",
+                    (a144, bbg_id),
+                )
+                atualizados += cursor.rowcount
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Erro ao salvar IDs de Holders: {e}")
+        return {"sucesso": False, "mensagem": "Erro ao salvar os IDs no banco."}
+    finally:
+        conn.close()
+
+    return {"sucesso": True, "mensagem": f"{atualizados} ID(s) salvo(s) com sucesso."}
+
 # Mapa usado pela orquestradora para rotear cada "tipo_preenchimento"
 # recebido do front para a função placeholder correspondente.
 # Para adicionar um novo tipo de preenchimento: crie a função acima e
 # registre-a aqui — a rota e o restante do fluxo não precisam mudar.
 FUNCOES_PREENCHIMENTO = {
     "tipo1": lambda ids, di, df: preencher_tipo1(ids, di, df),
-    "tipo2": lambda ids, di, df: preencher_tipo2(ids, di, df),
+    "tipo2": lambda ids, di, df: preencher_tipo2(ids),   # Holders ignora datas
     "tipo3": lambda ids, di, df: preencher_tipo3(ids, di, df),
-    "bdp": lambda ids, di, df: preencher_bdp(ids),  # BDP ignora datas
+    "bdp":   lambda ids, di, df: preencher_bdp(ids),     # BDP ignora datas
 }
 
 
-def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inicial, data_final):
+def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inicial, data_final, subtipos=None):
     """
     Orquestradora do preenchimento em lote (Aba 3).
 
@@ -704,7 +1247,9 @@ def preencher_tabelas_sob_demanda(tipo_preenchimento, lista_ativo_ids, data_inic
         detalhes_agregados = []
         sucesso_geral = True
 
-        for sub_tipo in ("tipo1", "tipo2", "tipo3"):
+        # "subtipos" vem do seletor da aba Todos (já validado e ordenado na rota)
+        tipos_do_lote = subtipos if subtipos is not None else SUBTIPOS_TODOS
+        for sub_tipo in tipos_do_lote:
             try:
                 resultado = FUNCOES_PREENCHIMENTO[sub_tipo](lista_ativo_ids, data_inicial, data_final)
                 mensagens.append(resultado["mensagem"])
@@ -827,12 +1372,58 @@ def api_preencher_lote():
     ids = payload.get('ativo_ids') or []
     data_inicial = payload.get('data_inicial')
     data_final = payload.get('data_final')
+    holders_confirmado = bool(payload.get('holders_confirmado'))
 
     if not ids:
         return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um ativo."}), 400
 
-    resultado = preencher_tabelas_sob_demanda(tipo, ids, data_inicial, data_final)
+    # Descobre quais tipos serão de fato executados
+    if tipo == 'todos':
+        pedidos = payload.get('subtipos') or []
+        subtipos = [s for s in SUBTIPOS_TODOS if s in pedidos]  # valida e ordena
+        if not subtipos:
+            return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um tipo de preenchimento."}), 400
+        tipos_a_rodar = subtipos
+    else:
+        subtipos = None
+        tipos_a_rodar = [tipo]
+
+    # Datas só são exigidas se algum tipo a rodar realmente as usa
+    if any(t in TIPOS_QUE_USAM_DATA for t in tipos_a_rodar) and not (data_inicial and data_final):
+        return jsonify({"sucesso": False, "mensagem": "Informe a data inicial e a data final."}), 400
+
+    # Rede de segurança de RegS/144A: mesmo que o front tenha pulado a
+    # verificação, o back-end não deixa passar cenário 1, nem cenário 2 sem
+    # confirmação. Holders (tipo2) e Volume (tipo3) dependem desses IDs.
+    if 'tipo2' in tipos_a_rodar or 'tipo3' in tipos_a_rodar:
+        avaliacao = holders_avaliar_ids(ids)
+        if avaliacao['status'] == 'bloqueado':
+            return jsonify({"sucesso": False,
+                            "mensagem": "Há ativo(s) sem nenhum ID RegS/144A."}), 409
+        if avaliacao['status'] == 'incompleto' and not holders_confirmado:
+            return jsonify({"sucesso": False,
+                            "mensagem": "Há ativo(s) com apenas um ID RegS/144A. Confirmação necessária."}), 409
+
+    resultado = preencher_tabelas_sob_demanda(tipo, ids, data_inicial, data_final, subtipos)
     return jsonify(resultado)
+
+
+@app.route('/api/holders/verificar', methods=['POST'])
+def api_holders_verificar():
+    payload = request.get_json(silent=True) or {}
+    ids = payload.get('ativo_ids') or []
+    if not ids:
+        return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um ativo."}), 400
+    return jsonify({"sucesso": True, **holders_avaliar_ids(ids)})
+
+
+@app.route('/api/holders/salvar-ids', methods=['POST'])
+def api_holders_salvar_ids():
+    payload = request.get_json(silent=True) or {}
+    correcoes = payload.get('correcoes') or []
+    if not correcoes:
+        return jsonify({"sucesso": False, "mensagem": "Nada para salvar."}), 400
+    return jsonify(db_atualizar_ids_holders(correcoes))
 
 
 if __name__ == '__main__':

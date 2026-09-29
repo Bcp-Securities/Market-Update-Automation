@@ -145,8 +145,32 @@
                             <label class="field-label" for="select-lote-todos">Ativos</label>
                             <select id="select-lote-todos" multiple></select>
                             <p class="field-hint">
-                                Selecione um ou mais ativos. Preço e Yield, Holders e Volume serão
-                                processados de uma vez, com os mesmos ativos e período.
+                                Selecione um ou mais ativos:
+                            </p>
+                        </div>
+
+                        <div class="field-group">
+                            <span class="field-label">Tipos a preencher</span>
+                            <div class="check-group" id="todos-tipos">
+                                <label class="check-chip">
+                                    <input type="checkbox" value="tipo1" checked>
+                                    <span>Preço e Yield</span>
+                                </label>
+                                <label class="check-chip">
+                                    <input type="checkbox" value="tipo2" checked>
+                                    <span>Holders</span>
+                                </label>
+                                <label class="check-chip">
+                                    <input type="checkbox" value="tipo3" checked>
+                                    <span>Volume</span>
+                                </label>
+                                <label class="check-chip">
+                                    <input type="checkbox" value="bdp" checked>
+                                    <span>Dados BDP</span>
+                                </label>
+                            </div>
+                            <p class="field-hint">
+                                O período abaixo só é usado por Preço e Yield e Volume; nos demais tipos é ignorado.
                             </p>
                         </div>
 
@@ -229,19 +253,11 @@
                         <div class="field-group">
                             <label class="field-label" for="select-lote-tipo2">Ativos</label>
                             <select id="select-lote-tipo2" multiple></select>
-                            <p class="field-hint">Selecione um ou mais ativos para processar.</p>
+                            <p class="field-hint">
+                                Selecione um ou mais ativos. Não é necessário informar período: os holders
+                                retornados são sempre os mais recentes.
+                            </p>
                         </div>
-
-                        <!-- <div class="date-range">
-                            <div class="field-group">
-                                <label class="field-label" for="data-inicial-tipo2">Data inicial</label>
-                                <input type="date" id="data-inicial-tipo2" name="data_inicial">
-                            </div>
-                            <div class="field-group">
-                                <label class="field-label" for="data-final-tipo2">Data final</label>
-                                <input type="date" id="data-final-tipo2" name="data_final">
-                            </div>
-                        </div> -->
 
                         <div class="action-row action-row-end">
                             <button class="btn btn-primary btn-processar-lote" data-lote-tipo="tipo2">
@@ -270,7 +286,10 @@
                         <div class="field-group">
                             <label class="field-label" for="select-lote-tipo3">Ativos</label>
                             <select id="select-lote-tipo3" multiple></select>
-                            <p class="field-hint">Selecione um ou mais ativos para processar.</p>
+                            <p class="field-hint">
+                                Selecione um ou mais ativos para processar. O volume é buscado a partir
+                                dos IDs RegS/144A de cada ativo.
+                            </p>
                         </div>
 
                         <div class="date-range">

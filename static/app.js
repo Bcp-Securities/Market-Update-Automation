@@ -370,9 +370,13 @@ function initAbaEditar(listaAtivos) {
 // uma entrada aqui.
 const TIPOS_LOTE = ['todos', 'tipo1', 'tipo2', 'tipo3', 'bdp'];
 
-// Tipos cuja sub-aba NÃO tem campos de data (ex: BDP, que usa a
-// referência mais recente da Bloomberg em vez de uma série histórica).
-const TIPOS_SEM_DATA = ['bdp', 'tipo2'];
+// Tipos cujo preenchimento depende dos IDs RegS/144A e por isso passam
+// pela verificação/painel de correção antes de rodar.
+const TIPOS_DEPENDENTES_DE_HOLDERS = ['tipo2', 'tipo3'];
+
+// Tipos que precisam de período. Holders e BDP sempre trazem o dado mais
+// atual e ignoram datas. (Manter em sincronia com TIPOS_QUE_USAM_DATA no app.py)
+const TIPOS_COM_DATA = ['tipo1', 'tipo3'];
 
 function initSubTabsLote() {
     const buttons = document.querySelectorAll('.subtab-btn');
@@ -387,17 +391,92 @@ function initSubTabsLote() {
     });
 }
 
+// ---------------------------------------------------------------------
+// Helpers do painel de verificação de IDs (Holders)
+// ---------------------------------------------------------------------
+
+function criarBotao(texto, classes, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `btn ${classes}`;
+    btn.textContent = texto;
+    btn.addEventListener('click', onClick);
+    return btn;
+}
+
+// Uma linha por ativo: mostra o ID geral e os dois IDs de Holders.
+// O que já está preenchido aparece travado; o que falta vira input editável.
+function criarLinhaHolders(ativo) {
+    const linha = document.createElement('div');
+    linha.className = 'holders-row';
+    linha.dataset.bbgId = ativo.bbg_id;
+
+    const titulo = document.createElement('div');
+    titulo.className = 'holders-row-title';
+    titulo.textContent = ativo.bbg_id;
+    linha.appendChild(titulo);
+
+    const campos = document.createElement('div');
+    campos.className = 'holders-row-fields';
+
+    ['bbg_id_regs', 'bbg_id_144a'].forEach((chave) => {
+        const grupo = document.createElement('div');
+        grupo.className = 'field-group';
+
+        const label = document.createElement('label');
+        label.textContent = LABELS[chave];
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.dataset.campo = chave;
+        if (ativo[chave]) {
+            input.value = ativo[chave];
+            input.disabled = true;
+        } else {
+            input.placeholder = 'Não preenchido';
+        }
+
+        grupo.append(label, input);
+        campos.appendChild(grupo);
+    });
+
+    linha.appendChild(campos);
+    return linha;
+}
+
+// Lê só os inputs editáveis que o usuário preencheu.
+function coletarCorrecoesHolders(listaEl) {
+    const correcoes = [];
+    listaEl.querySelectorAll('.holders-row').forEach((linha) => {
+        const item = { bbg_id: linha.dataset.bbgId };
+        let alterou = false;
+        linha.querySelectorAll('input:not(:disabled)').forEach((input) => {
+            const valor = input.value.trim();
+            if (valor) {
+                item[input.dataset.campo] = valor;
+                alterou = true;
+            }
+        });
+        if (alterou) correcoes.push(item);
+    });
+    return correcoes;
+}
+
+// =====================================================================
+// Aba 3: função principal
+// =====================================================================
+
 function initAbaLote(listaAtivos) {
     initSubTabsLote();
 
     const choicesPorTipo = {};
 
     TIPOS_LOTE.forEach((tipo) => {
-        const usaData = !TIPOS_SEM_DATA.includes(tipo);
-
         const selectEl = document.getElementById(`select-lote-${tipo}`);
-        const dataInicialEl = usaData ? document.getElementById(`data-inicial-${tipo}`) : null;
-        const dataFinalEl = usaData ? document.getElementById(`data-final-${tipo}`) : null;
+        // Podem ser null (Holders e BDP não têm campos de data)
+        const dataInicialEl = document.getElementById(`data-inicial-${tipo}`);
+        const dataFinalEl = document.getElementById(`data-final-${tipo}`);
+        const dateRangeEl = document.querySelector(`#subpanel-${tipo} .date-range`);
         const btnProcessar = document.querySelector(`.btn-processar-lote[data-lote-tipo="${tipo}"]`);
         const feedback = document.querySelector(`.lote-feedback[data-lote-tipo="${tipo}"]`);
         const resultado = document.querySelector(`.lote-resultado[data-lote-tipo="${tipo}"]`);
@@ -416,12 +495,206 @@ function initAbaLote(listaAtivos) {
 
         choicesPorTipo[tipo] = choices;
 
-        btnProcessar.addEventListener('click', async () => {
+        // Painel de verificação de IDs: existe em qualquer sub-aba onde um
+        // tipo dependente de RegS/144A pode rodar.
+        let painelHolders = null;
+        if (TIPOS_DEPENDENTES_DE_HOLDERS.includes(tipo) || tipo === 'todos') {
+            painelHolders = document.createElement('div');
+            painelHolders.className = 'card result-card holders-check';
+            painelHolders.hidden = true;
+            resultado.before(painelHolders);
+        }
+
+        // ---------------- Quais tipos esta sub-aba vai rodar ----------------
+
+        function obterTiposEfetivos() {
+            if (tipo !== 'todos') return [tipo];
+            return Array.from(document.querySelectorAll('#todos-tipos input:checked'))
+                .map((el) => el.value);
+        }
+
+        function precisaData(tipos) {
+            return tipos.some((t) => TIPOS_COM_DATA.includes(t));
+        }
+
+        function atualizarEstadoDatas() {
+            if (!dateRangeEl) return;
+            const precisa = precisaData(obterTiposEfetivos());
+            dateRangeEl.classList.toggle('is-disabled', !precisa);
+            dateRangeEl.toggleAttribute('inert', !precisa);
+        }
+
+        if (tipo === 'todos') {
+            document.getElementById('todos-tipos').addEventListener('change', atualizarEstadoDatas);
+            atualizarEstadoDatas();
+        }
+
+        // ---------------- Execução ----------------
+
+        async function comCarregamento(fn) {
+            setButtonLoading(btnProcessar, true);
+            try {
+                await fn();
+            } catch (err) {
+                setFieldHint(feedback, err.message, 'error');
+            } finally {
+                setButtonLoading(btnProcessar, false);
+            }
+        }
+
+        async function executar(rodada, holdersConfirmado) {
+            resultado.hidden = true;
+            setFieldHint(feedback, '');
+
+            const data = await apiRequest('/api/preencher-lote', {
+                method: 'POST',
+                body: JSON.stringify({
+                    tipo_preenchimento: tipo,
+                    subtipos: tipo === 'todos' ? rodada.tipos : undefined,
+                    ativo_ids: rodada.selecionados,
+                    data_inicial: rodada.dataInicial,
+                    data_final: rodada.dataFinal,
+                    holders_confirmado: holdersConfirmado,
+                }),
+            });
+
+            lista.innerHTML = '';
+            data.detalhes.forEach((item) => {
+                const li = document.createElement('li');
+                li.innerHTML = `
+                    <span class="result-id">${item.id}</span>
+                    <div>
+                        <span>${item.mensagem}</span>
+                        <span class="result-status ${item.status}">
+                            ${item.status === 'ok' ? 'OK' : 'ERRO'}
+                        </span>
+                    </div>
+                `;
+                lista.appendChild(li);
+            });
+
+            resultado.hidden = false;
+            showToast(data.mensagem, data.sucesso ? 'success' : 'error');
+        }
+
+        // Decide se roda direto ou se precisa passar pela verificação de Holders
+        async function avancar(rodada) {
+            const dependeDeHolders = rodada.tipos.some((t) => TIPOS_DEPENDENTES_DE_HOLDERS.includes(t));
+            if (!dependeDeHolders) {
+                return executar(rodada, false);
+            }
+
+            const avaliacao = await apiRequest('/api/holders/verificar', {
+                method: 'POST',
+                body: JSON.stringify({ ativo_ids: rodada.selecionados }),
+            });
+
+            if (avaliacao.status === 'ok') {
+                painelHolders.hidden = true;
+                return executar(rodada, false);
+            }
+
+            mostrarPainelHolders(rodada, avaliacao);
+        }
+
+        function mostrarPainelHolders(rodada, avaliacao) {
+            const bloqueado = avaliacao.status === 'bloqueado';
+            const problemas = avaliacao.ativos.filter((a) => a.cenario !== 3);
+            const qtdOk = avaliacao.ativos.length - problemas.length;
+
+            painelHolders.innerHTML = '';
+
+            const header = document.createElement('div');
+            header.className = 'result-header';
+            const titulo = document.createElement('h3');
+            titulo.textContent = 'Séries necessárias';
+            const badge = document.createElement('span');
+            badge.className = `badge ${bloqueado ? 'badge-danger' : 'badge-warning'}`;
+            badge.textContent = bloqueado ? 'Bloqueado' : 'Atenção';
+            header.append(titulo, badge);
+
+            const msg = document.createElement('p');
+            msg.className = 'holders-msg';
+            msg.textContent = bloqueado
+                ? 'Não é possível buscar os dados: há ativo(s) sem nenhum dos dois IDs (RegS e 144A). Preencha ao menos um deles abaixo para continuar.'
+                : 'Há ativo(s) com apenas um dos dois IDs preenchido. Você pode completar agora ou prosseguir usando apenas o ID existente.';
+
+            const listaProblemas = document.createElement('div');
+            listaProblemas.className = 'holders-list';
+            problemas.forEach((a) => listaProblemas.appendChild(criarLinhaHolders(a)));
+
+            const hint = document.createElement('p');
+            hint.className = 'field-hint';
+
+            const acoes = document.createElement('div');
+            acoes.className = 'action-row';
+
+            acoes.appendChild(criarBotao('Cancelar', 'btn-ghost', () => {
+                painelHolders.hidden = true;
+            }));
+
+            if (!bloqueado) {
+                acoes.appendChild(criarBotao('Prosseguir mesmo assim', 'btn-ghost', () => {
+                    painelHolders.hidden = true;
+                    comCarregamento(() => executar(rodada, true));
+                }));
+            }
+
+            const btnSalvar = criarBotao('Salvar IDs e continuar', 'btn-primary', async () => {
+                const correcoes = coletarCorrecoesHolders(listaProblemas);
+                if (!correcoes.length) {
+                    setFieldHint(hint, 'Preencha ao menos um campo para salvar.', 'error');
+                    return;
+                }
+
+                btnSalvar.disabled = true;
+                try {
+                    const salvo = await apiRequest('/api/holders/salvar-ids', {
+                        method: 'POST',
+                        body: JSON.stringify({ correcoes }),
+                    });
+                    if (!salvo.sucesso) {
+                        setFieldHint(hint, salvo.mensagem, 'error');
+                        return;
+                    }
+                    showToast(salvo.mensagem, 'success');
+                    // Reavalia: se agora estiver tudo certo, segue sozinho;
+                    // se ainda faltar algo, o painel reaparece atualizado.
+                    await comCarregamento(() => avancar(rodada));
+                } catch (err) {
+                    setFieldHint(hint, err.message, 'error');
+                } finally {
+                    btnSalvar.disabled = false;
+                }
+            });
+            acoes.appendChild(btnSalvar);
+
+            painelHolders.append(header, msg, listaProblemas);
+            if (qtdOk > 0) {
+                const nota = document.createElement('p');
+                nota.className = 'holders-note';
+                nota.textContent = `${qtdOk} ativo(s) já com os dois IDs preenchidos (não listados).`;
+                painelHolders.appendChild(nota);
+            }
+            painelHolders.append(hint, acoes);
+            painelHolders.hidden = false;
+        }
+
+        // ---------------- Clique em "Processar" ----------------
+
+        btnProcessar.addEventListener('click', () => {
+            const tipos = obterTiposEfetivos();
             const selecionados = choices.getValue(true);
+            const usaData = precisaData(tipos);
             const dataInicial = usaData ? dataInicialEl.value : null;
             const dataFinal = usaData ? dataFinalEl.value : null;
 
-            // ---------------- Validações ----------------
+            if (painelHolders) painelHolders.hidden = true;
+
+            if (!tipos.length) {
+                setFieldHint(feedback, 'Selecione ao menos um tipo de preenchimento.', 'error');
+                return;
+            }
             if (!selecionados.length) {
                 setFieldHint(feedback, 'Selecione ao menos um ativo.', 'error');
                 return;
@@ -444,44 +717,8 @@ function initAbaLote(listaAtivos) {
                 }
             }
 
-            // ---------------- Processamento ----------------
             setFieldHint(feedback, '');
-            setButtonLoading(btnProcessar, true);
-            resultado.hidden = true;
-
-            try {
-                const data = await apiRequest('/api/preencher-lote', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        tipo_preenchimento: tipo,
-                        ativo_ids: selecionados,
-                        data_inicial: dataInicial,
-                        data_final: dataFinal,
-                    }),
-                });
-
-                lista.innerHTML = '';
-                data.detalhes.forEach((item) => {
-                    const li = document.createElement('li');
-                    li.innerHTML = `
-                        <span class="result-id">${item.id}</span>
-                        <div>
-                            <span>${item.mensagem}</span>
-                            <span class="result-status ${item.status}">
-                                ${item.status === 'ok' ? 'OK' : 'ERRO'}
-                            </span>
-                        </div>
-                    `;
-                    lista.appendChild(li);
-                });
-
-                resultado.hidden = false;
-                showToast(data.mensagem, data.sucesso ? 'success' : 'error');
-            } catch (err) {
-                setFieldHint(feedback, err.message, 'error');
-            } finally {
-                setButtonLoading(btnProcessar, false);
-            }
+            comCarregamento(() => avancar({ tipos, selecionados, dataInicial, dataFinal }));
         });
     });
 

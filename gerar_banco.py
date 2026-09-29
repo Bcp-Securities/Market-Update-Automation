@@ -108,6 +108,45 @@ CREATE TABLE IF NOT EXISTS fact_bdp (
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
 );
+
+CREATE TABLE IF NOT EXISTS fact_holders (
+    asset_id INTEGER NOT NULL,
+    date_id INTEGER NOT NULL,
+    holder_name TEXT,
+    holder_id INTEGER,
+    position_thousand REAL,
+    position_change_thousand REAL,
+    filing_date DATE,
+    filing_source TEXT,
+    insider_status TEXT,
+    percent_outstanding REAL,
+    institution_type TEXT,
+    metro_area TEXT,
+    country TEXT,
+    series_type TEXT NOT NULL,
+
+    PRIMARY KEY (
+        asset_id,
+        date_id,
+        holder_id,
+        filing_date,
+        series_type
+    ),
+
+    FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id)
+    FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
+);
+
+CREATE TABLE IF NOT EXISTS fact_trading_volume (
+    asset_id  INTEGER NOT NULL,
+    date_id   INTEGER NOT NULL,
+    trading_volume_thousands REAL,
+    volume_partial INTEGER DEFAULT 0,
+    series_type TEXT NOT NULL,
+    PRIMARY KEY (asset_id, date_id, series_type),
+    FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
+    FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
+);
 """
 # CREATE TABLE IF NOT EXISTS cpi (
 #     id                     INTEGER PRIMARY KEY,
