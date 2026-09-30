@@ -475,7 +475,7 @@ def db_atualizar_ativo(dados):
     return {"sucesso": True, "mensagem": f"Ativo {dados.get('bbg_id')} atualizado com sucesso."}
 
 
-def obter_datas_existentes(conn, tabela_fato, bbg_id, data_inicial, data_final, series_type=None):
+def obter_datas_existentes(conn, tabela_fato, bbg_id, data_inicial, data_final, series_type=None, ignore_partial=False):
     """Retorna um set() com as datas (datetime.date) que já existem no banco para o ativo e período."""
     query = f"""
         SELECT d.full_date 
@@ -489,6 +489,10 @@ def obter_datas_existentes(conn, tabela_fato, bbg_id, data_inicial, data_final, 
     if series_type:
         query += " AND f.series_type = ?"
         params.append(series_type)
+        
+    # SE ignore_partial FOR TRUE, SÓ CONSIDERA COMO "EXISTENTE" O QUE FOR DEFINITIVO (0)
+    if ignore_partial and tabela_fato == 'fact_trading_volume':
+        query += " AND f.volume_partial = 0"
         
     df = pd.read_sql(query, conn, params=tuple(params))
     return set(pd.to_datetime(df['full_date']).dt.date)
@@ -697,9 +701,11 @@ def preencher_tipo2(lista_ativo_ids):
             erro_ativo = None
 
             for tipo, id_consulta in ids_consulta.items():
+                # Formata o ID adicionando @TRAC CORP se não existir
+                id_consulta_bbg = id_consulta if id_consulta.upper().endswith("@TRAC CORP") else f"{id_consulta}@TRAC CORP"
                 try:
                     print(f"[Holders] {ativo_id} -> consultando {tipo}: {id_consulta}")
-                    df = blp.bds(id_consulta, "ALL_HOLDERS_PUBLIC_FILINGS")
+                    df = blp.bds(id_consulta_bbg, "ALL_HOLDERS_PUBLIC_FILINGS")
                     df.columns = df.columns.str.strip()
 
                     if df.empty:
@@ -862,10 +868,12 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
             sub_ids_sem_dado = []
 
             for tipo, id_consulta in ids_consulta.items():
+                # Formata o ID adicionando @TRAC CORP se não existir
+                id_consulta_bbg = id_consulta if id_consulta.upper().endswith("@TRAC CORP") else f"{id_consulta}@TRAC CORP"
                 try:
                     print(f"[Volume] {ativo_id} -> consultando {tipo}: {id_consulta}")
                     
-                    existentes = obter_datas_existentes(conn, 'fact_trading_volume', ativo_id, data_inicial, data_final, series_type=tipo)
+                    existentes = obter_datas_existentes(conn, 'fact_trading_volume', ativo_id, data_inicial, data_final, series_type=tipo, ignore_partial=True)
                     faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
                     
                     if not faltantes:
@@ -876,7 +884,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
                     
                     for dt_ini, dt_fim in fatias:
                         df_slice = blp.bdh(
-                            tickers=[id_consulta], flds=['PX_VOLUME'],
+                            tickers=[id_consulta_bbg], flds=['PX_VOLUME'],
                             start_date=dt_ini, end_date=dt_fim, Per='D'
                         )
                         if not df_slice.empty:
