@@ -491,8 +491,8 @@ def obter_datas_existentes(conn, tabela_fato, bbg_id, data_inicial, data_final, 
         params.append(series_type)
         
     # SE ignore_partial FOR TRUE, SÓ CONSIDERA COMO "EXISTENTE" O QUE FOR DEFINITIVO (0)
-    if ignore_partial and tabela_fato == 'fact_trading_volume':
-        query += " AND f.volume_partial = 0"
+    if ignore_partial and tabela_fato == 'fact_trading_volume' or tabela_fato == 'fact_pricing':
+        query += " AND f.partial = 0"
         
     df = pd.read_sql(query, conn, params=tuple(params))
     return set(pd.to_datetime(df['full_date']).dt.date)
@@ -519,9 +519,9 @@ def calcular_fatias_faltantes(datas_existentes, data_inicial, data_final):
     fatias.append((inicio, anterior))
     return fatias
 
-def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
+def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     """
-    Preenchimento em lote — Tipo 1 (Preço e Yield).
+    Preenchimento em lote — Tipo 1 (Preço e Yield). Assim como no Tipo 3, partial representa dados do dia atual, 1 para hoje e 0 caso constrário.
 
     Parâmetros:
         lista_ativo_ids (list[str])
@@ -541,11 +541,19 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
     if not isinstance(data_final, datetime) and not isinstance(data_final, date):
         data_final = datetime.strptime(data_final, "%Y-%m-%d").date()
 
+    lista_ativo_ids = lista_ativo_ids_orig.copy()  # Para não modificar a lista original
+    for idx, ativo_id in enumerate(lista_ativo_ids):
+        # Formata o ID adicionando @BVAL CORP se não existir
+        id_consulta_bbg = ativo_id if ativo_id.upper().endswith("@BVAL CORP") else f"{ativo_id}@BVAL CORP"
+        lista_ativo_ids[idx] = id_consulta_bbg
+
+    hoje = datetime.now().date()
     datas = pd.date_range(start=data_inicial, end=data_final).to_pydatetime().tolist()
     conn = sqlite3.connect(DB_PATH)
-    ids_map = garantir_dim_date_range(conn, datas)
 
     try:
+        ids_map = garantir_dim_date_range(conn, datas)
+        
         # 1. Mapeia fatias e datas faltantes por ativo
         grupos_fatias = {}
         tickers_solicitados = set(lista_ativo_ids)
@@ -554,7 +562,7 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         for ativo_id in lista_ativo_ids:
             existentes = obter_datas_existentes(conn, 'fact_pricing', ativo_id, data_inicial, data_final)
             faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
-            
+
             if faltantes:
                 faltantes_por_ativo[ativo_id] = set(faltantes)
                 fatias = tuple(calcular_fatias_faltantes(existentes, data_inicial, data_final))
@@ -567,15 +575,19 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         for fatias, tickers_grupo in grupos_fatias.items():
             for dt_ini, dt_fim in fatias:
                 df_slice = blp.bdh(
-                    tickers=tickers_grupo, flds=['PX_MID', 'YLD_YTM_MID'],
-                    start_date=dt_ini, end_date=dt_fim, Per='D' # <-- Removido Fill='P'
+                    tickers=tickers_grupo, flds=['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid'],
+                    start_date=dt_ini, end_date=dt_fim, Per='D'
                 )
                 if not df_slice.empty:
                     frames_bdh.append(df_slice)
 
         if not frames_bdh:
             conn.close()
-            return {"sucesso": True, "mensagem": "Nenhum dado novo precisou ser baixado (banco atualizado).", "detalhes": []}
+            detalhes = [
+                {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield já atualizados (nenhum dado novo necessário ou nenhum novo disponível)."}
+                for ativo_id in lista_ativo_ids
+            ]
+            return {"sucesso": True, "mensagem": "Nenhum dado novo precisou ser baixado (banco atualizado).", "detalhes": detalhes}
 
         # 3. Concatena tudo
         df_bdh_raw = pd.concat(frames_bdh, ignore_index=True)
@@ -597,12 +609,11 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         if 'field' in df_bdh.columns and 'value' in df_bdh.columns:
             df_bdh = df_bdh.pivot(index=['ticker', 'date'], columns='field', values='value').reset_index()
 
-        for col in ['PX_MID', 'YLD_YTM_MID']:
+        for col in ['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid']:
             if col not in df_bdh.columns:
                 df_bdh[col] = None
             df_bdh[col] = pd.to_numeric(df_bdh[col], errors='coerce')
 
-        tickers_solicitados = set(lista_ativo_ids)
         tickers_retornados = set(df_bdh['ticker'].unique())
     
         tickers_faltantes = sorted(
@@ -610,20 +621,23 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
         )
 
         df_bdh.rename(columns={
-            'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id'
+            'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
         }, inplace=True)
-    
+
+        df_bdh['bbg_id'] = df_bdh['bbg_id'].str.split('@').str[0]  # Remove o sufixo @BVAL CORP para casar com dim_security
+
         df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
         df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
         df_fact['date_id'] = df_fact['date'].apply(lambda x: ids_map[x.strftime("%Y-%m-%d")])
+        df_fact['partial'] = (df_fact['date'].dt.date == hoje).astype(int)
         
-        cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid']
+        cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'partial']
         df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
 
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid)
-            SELECT asset_id, date_id, price_mid, ytm_mid FROM fact_pricing_temp
+            INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, partial)
+            SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, partial FROM fact_pricing_temp
         ''')
         cursor.execute('DROP TABLE fact_pricing_temp')
         conn.commit()
@@ -644,7 +658,7 @@ def preencher_tipo1(lista_ativo_ids, data_inicial, data_final):
     detalhes = [
         {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield preenchidos."}
         if ativo_id not in tickers_faltantes else
-        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes."}
+        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes de preço."}
         for ativo_id in lista_ativo_ids
     ]
     return {
@@ -817,11 +831,11 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
 
     Assim como Holders, o volume é buscado usando bbg_id_regs e/ou
     bbg_id_144a de cada ativo (o bbg_id "padrão" NÃO é usado), com uma
-    chamada BDH por sub-id. Cada linha recebe volume_partial=1 se sua data
+    chamada BDH por sub-id. Cada linha recebe partial=1 se sua data
     for hoje (pregão ainda não fechado) e 0 caso contrário; como a PK de
     fact_trading_volume é (asset_id, date_id, series_type), reprocessar uma
     data marcada como parcial em execução futura sobrescreve a linha antiga
-    com o valor final e volume_partial=0.
+    com o valor final e partial=0.
 
     Parâmetros:
         lista_ativo_ids (list[str])
@@ -845,7 +859,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
     ids_map = garantir_dim_date_range(conn, datas)
     df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
 
-    colunas_saida = ['asset_id', 'date_id', 'trading_volume_thousands', 'volume_partial', 'series_type']
+    colunas_saida = ['asset_id', 'date_id', 'trading_volume_thousands', 'partial', 'series_type']
 
     try:
         for ativo_id in lista_ativo_ids:
@@ -866,6 +880,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
             frames_ativo = []
             erro_ativo = None
             sub_ids_sem_dado = []
+            sub_ids_ja_completos = []
 
             for tipo, id_consulta in ids_consulta.items():
                 # Formata o ID adicionando @TRAC CORP se não existir
@@ -877,6 +892,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
                     faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
                     
                     if not faltantes:
+                        sub_ids_ja_completos.append(tipo)
                         continue # Pula se não falta nada
                         
                     fatias = calcular_fatias_faltantes(existentes, data_inicial, data_final)
@@ -914,7 +930,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
                     df.rename(columns={'PX_VOLUME': 'trading_volume_thousands'}, inplace=True)
                     df['series_type'] = tipo
                     df['bbg_id'] = ativo_id
-                    print(df)
+                    
                     frames_ativo.append(df)
                 except Exception as e:
                     # Falha isolada por sub-id (RegS/144A): não derruba o
@@ -926,6 +942,19 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
                 if erro_ativo:
                     detalhes.append({"id": ativo_id, "status": "erro",
                                      "mensagem": f"Falha ao consultar Volume: {erro_ativo}"})
+                elif sub_ids_ja_completos and not sub_ids_sem_dado:
+                    # Nenhum frame baixado, mas só porque já estava tudo no
+                    # banco — não é falha, é sucesso sem nada a atualizar.
+                    detalhes.append({"id": ativo_id, "status": "ok",
+                                     "mensagem": f"Volume já atualizado para o período ({', '.join(sub_ids_ja_completos)})."})
+                elif sub_ids_sem_dado and not sub_ids_ja_completos:
+                    detalhes.append({"id": ativo_id, "status": "erro",
+                                     "mensagem": f"Nenhum volume retornado pela Bloomberg para: {', '.join(sub_ids_sem_dado)}."})
+                elif sub_ids_ja_completos and sub_ids_sem_dado:
+                    # Caso misto: um sub-id já completo, outro sem dado algum
+                    detalhes.append({"id": ativo_id, "status": "ok",
+                                     "mensagem": f"Já atualizado: {', '.join(sub_ids_ja_completos)}. "
+                                                 f"Sem dados para: {', '.join(sub_ids_sem_dado)}."})
                 else:
                     detalhes.append({"id": ativo_id, "status": "erro",
                                      "mensagem": "Nenhum volume retornado pela Bloomberg."})
@@ -939,7 +968,7 @@ def preencher_tipo3(lista_ativo_ids, data_inicial, data_final):
                 continue
 
             df_ativo['date_id'] = df_ativo['date'].apply(lambda x: ids_map[x.strftime("%Y-%m-%d")])
-            df_ativo['volume_partial'] = (df_ativo['date'].dt.date == hoje).astype(int)
+            df_ativo['partial'] = (df_ativo['date'].dt.date == hoje).astype(int)
 
             df_ativo[colunas_saida].to_sql('fact_trading_volume_temp', conn, if_exists='replace', index=False)
             cursor = conn.cursor()
@@ -989,7 +1018,7 @@ def preencher_bdp(lista_ativo_ids):
     Retorno esperado (dict): mesmo formato de preencher_tipo1.
     """
     conn = sqlite3.connect(DB_PATH)
-    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX', 'z_sprd_mid']
+    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX']
     date_id = garantir_dim_date(conn, datetime.now().date())
     collected_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     try:
@@ -1019,12 +1048,11 @@ def preencher_bdp(lista_ativo_ids):
         df_bdp['MTY_DUR_MID'] = pd.to_numeric(df_bdp['MTY_DUR_MID'], errors='coerce')
         df_bdp['YLD_YTC_MID'] = pd.to_numeric(df_bdp['YLD_YTC_MID'], errors='coerce')
         df_bdp['NXT_CALL_PX'] = pd.to_numeric(df_bdp['NXT_CALL_PX'], errors='coerce')
-        df_bdp['z_sprd_mid'] = pd.to_numeric(df_bdp['z_sprd_mid'], errors='coerce')
 
         df_bdp.rename(columns={
             'ticker': 'bbg_id', 'AMT_OUTSTANDING': 'amt_outstanding', 'MTY_DUR_MID': 'duration_mid',
             'RTG_MOODY': 'rating_moody', 'RTG_SP_LONG': 'rating_sp', 'RTG_FITCH': 'rating_fitch', 'BB_COMPOSITE': 'bb_composite',
-            'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price', 'z_sprd_mid': 'z_spread'
+            'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price'
         }, inplace=True)
 
         df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
@@ -1033,14 +1061,14 @@ def preencher_bdp(lista_ativo_ids):
         df_fact['collected_at'] = collected_at
 
         cols = ['asset_id', 'date_id', 'collected_at', 'duration_mid', 'amt_outstanding',
-                'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price', 'z_spread']
+                'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price']
         df_fact[cols].to_sql('fact_bdp_temp', conn, if_exists='replace', index=False)
 
         cursor = conn.cursor()
         cursor.execute('''
             INSERT OR REPLACE INTO fact_bdp
-            (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread)
-            SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread
+            (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price)
+            SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price
             FROM fact_bdp_temp
         ''')
         cursor.execute('DROP TABLE fact_bdp_temp')

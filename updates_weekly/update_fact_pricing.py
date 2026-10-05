@@ -37,10 +37,14 @@ def descobrir_segunda_da_semana(hoje):
 
 def tabela_ja_preenchida(conn, tabela, date_id):
     """
-    Verifica se ja existe QUALQUER registro na tabela informada para a date_id dada.
+    Verifica se já existe registro consolidado na tabela informada para a date_id dada.
     """
     cursor = conn.cursor()
-    cursor.execute(f"SELECT COUNT(*) FROM {tabela} WHERE date_id = ?", (date_id,))
+    if tabela == 'fact_pricing':
+        # Considera como preenchido apenas se não for um dado parcial
+        cursor.execute(f"SELECT COUNT(*) FROM {tabela} WHERE date_id = ? AND partial = 0", (date_id,))
+    else:
+        cursor.execute(f"SELECT COUNT(*) FROM {tabela} WHERE date_id = ?", (date_id,))
     return cursor.fetchone()[0] > 0
 
 
@@ -119,11 +123,20 @@ def garantir_dim_date(conn, dt_obj):
 # BDH -> fact_pricing (preco/yield, serie temporal)
 # ==========================================
 
-def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
-    logger.info(f"[BDH] Buscando PX_MID/YLD_YTM_MID para {len(tickers)} ticker(s) em {reference_date}...")
+def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0):
+    # Formata os tickers para a chamada e cria um dicionário para reverter depois
+    tickers_bbg = []
+    mapa_reverso = {}
+    for t in tickers:
+        t_formatado = t if t.endswith("@BVAL CORP") else f"{t}@BVAL CORP"
+        tickers_bbg.append(t_formatado)
+        mapa_reverso[t_formatado] = t
+
+    logger.info(f"[BDH] Buscando PX_MID/YLD_YTM_MID/Z_SPREAD para {len(tickers_bbg)} ticker(s) em {reference_date}...")
 
     df_bdh = blp.bdh(
-        tickers=tickers, flds=['PX_MID', 'YLD_YTM_MID'],
+        tickers=tickers_bbg, # <-- Usa a lista formatada com @BVAL CORP
+        flds=['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid'],
         start_date=reference_date, end_date=reference_date, Per='D', Fill='P'
     )
 
@@ -136,7 +149,11 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
     if 'field' in df_bdh.columns and 'value' in df_bdh.columns:
         df_bdh = df_bdh.pivot(index='ticker', columns='field', values='value').reset_index()
 
-    for col in ['PX_MID', 'YLD_YTM_MID']:
+    # Reverte a coluna 'ticker' para o formato original antes de prosseguir
+    if 'ticker' in df_bdh.columns:
+        df_bdh['ticker'] = df_bdh['ticker'].map(mapa_reverso).fillna(df_bdh['ticker'])
+
+    for col in ['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid']:
         if col not in df_bdh.columns:
             df_bdh[col] = None
         df_bdh[col] = pd.to_numeric(df_bdh[col], errors='coerce')
@@ -164,24 +181,25 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
 
 
     df_bdh.rename(columns={
-        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id'
+        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
     }, inplace=True)
 
     df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
     df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
     df_fact['date_id'] = date_id
+    df_fact['partial'] = is_partial
 
     n_sem_match = len(df_bdh) - len(df_fact)
     if n_sem_match > 0:
         logger.warning(f"[BDH] {n_sem_match} ticker(s) retornado(s) pela Bloomberg nao encontrados em dim_security.")
 
-    cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid']
+    cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'partial']
     df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
 
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid)
-        SELECT asset_id, date_id, price_mid, ytm_mid FROM fact_pricing_temp
+        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, partial)
+        SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, partial FROM fact_pricing_temp
     ''')
     cursor.execute('DROP TABLE fact_pricing_temp')
     conn.commit()
@@ -197,7 +215,7 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id):
 def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
     logger.info(f"[BDP] Buscando atributos semanais para {len(tickers)} ticker(s)...")
 
-    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX', 'z_sprd_mid']
+    campos_bdp = ['AMT_OUTSTANDING', 'RTG_MOODY', 'RTG_SP_LONG', 'RTG_FITCH', 'MTY_DUR_MID', 'BB_COMPOSITE', 'NXT_CALL_DT', 'YLD_YTC_MID', 'NXT_CALL_PX']
     df_bdp = blp.bdp(tickers, flds=campos_bdp)
 
     if df_bdp.empty:
@@ -217,12 +235,11 @@ def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
     df_bdp['MTY_DUR_MID'] = pd.to_numeric(df_bdp['MTY_DUR_MID'], errors='coerce')
     df_bdp['YLD_YTC_MID'] = pd.to_numeric(df_bdp['YLD_YTC_MID'], errors='coerce')
     df_bdp['NXT_CALL_PX'] = pd.to_numeric(df_bdp['NXT_CALL_PX'], errors='coerce')
-    df_bdp['z_sprd_mid'] = pd.to_numeric(df_bdp['z_sprd_mid'], errors='coerce')
 
     df_bdp.rename(columns={
         'ticker': 'bbg_id', 'AMT_OUTSTANDING': 'amt_outstanding', 'MTY_DUR_MID': 'duration_mid',
         'RTG_MOODY': 'rating_moody', 'RTG_SP_LONG': 'rating_sp', 'RTG_FITCH': 'rating_fitch', 'BB_COMPOSITE': 'bb_composite',
-        'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price', 'z_sprd_mid': 'z_spread'
+        'NXT_CALL_DT': 'next_call_dt', 'YLD_YTC_MID': 'next_call_yield', 'NXT_CALL_PX': 'next_call_price'
     }, inplace=True)
 
     df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
@@ -235,14 +252,14 @@ def atualizar_fact_bdp(conn, tickers, date_id, collected_at):
         logger.warning(f"[BDP] {n_sem_match} ticker(s) retornado(s) pela Bloomberg nao encontrados em dim_security.")
 
     cols = ['asset_id', 'date_id', 'collected_at', 'duration_mid', 'amt_outstanding',
-            'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price', 'z_spread']
+            'rating_moody', 'rating_sp', 'rating_fitch', 'bb_composite', 'next_call_dt', 'next_call_yield', 'next_call_price']
     df_fact[cols].to_sql('fact_bdp_temp', conn, if_exists='replace', index=False)
 
     cursor = conn.cursor()
     cursor.execute('''
         INSERT OR REPLACE INTO fact_bdp
-        (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread)
-        SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price, z_spread
+        (asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price)
+        SELECT asset_id, date_id, collected_at, duration_mid, amt_outstanding, rating_moody, rating_sp, rating_fitch, bb_composite, next_call_dt, next_call_yield, next_call_price
         FROM fact_bdp_temp
     ''')
     cursor.execute('DROP TABLE fact_bdp_temp')
@@ -330,7 +347,8 @@ def checar_atualizar(hoje, db_path=DB_PATH, modo_manual=False):
                 conn,
                 tickers,
                 reference_date_str,
-                date_id_hoje
+                date_id_hoje,
+                is_partial=1
             )
 
             logger.info(
@@ -366,6 +384,37 @@ def checar_atualizar(hoje, db_path=DB_PATH, modo_manual=False):
         # ==============================================================
         # MODO AUTOMÁTICO
         # ==============================================================
+        else:
+            # CONSOLIDAR DADOS PARCIAIS PENDENTES
+            cursor = conn.cursor()
+            cursor.execute("SELECT DISTINCT date_id FROM fact_pricing WHERE partial = 1")
+            dias_pendentes = cursor.fetchall()
+
+            for (d_id,) in dias_pendentes:
+                d_str = f"{str(d_id)[:4]}-{str(d_id)[4:6]}-{str(d_id)[6:]}"
+                data_pendente = datetime.strptime(d_str, '%Y-%m-%d').date()
+
+                if data_pendente < hoje:
+                    # Busca exclusivamente os tickers (bbg_id) que estão parciais neste dia específico
+                    cursor.execute("""
+                        SELECT d.bbg_id 
+                        FROM fact_pricing f
+                        JOIN dim_security d ON f.asset_id = d.asset_id
+                        WHERE f.date_id = ? AND f.partial = 1
+                    """, (d_id,))
+                    tickers_parciais = [row[0] for row in cursor.fetchall()]
+
+                    if tickers_parciais:
+                        logger.info(f"[BDH][AUTO] Consolidando {len(tickers_parciais)} ativo(s) alvo(s) do dia {d_str} que estavam marcados como partial...")
+                        n_pricing = atualizar_fact_pricing(
+                            conn,
+                            tickers_parciais,  # <-- Passa apenas a lista filtrada
+                            d_str,      
+                            d_id,       
+                            is_partial=0 
+                        )
+                        logger.info(f"[BDH][AUTO] {n_pricing} registro(s) consolidados para {d_str}.")
+
         segunda = descobrir_segunda_da_semana(hoje)
         date_id_segunda = int(segunda.strftime('%Y%m%d'))
 

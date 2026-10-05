@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS time_series (
     series_code TEXT NOT NULL,
     obs_date    TEXT NOT NULL,          -- ISO YYYY-MM-DD
     value       REAL,
+    partial INTEGER DEFAULT 0,
     PRIMARY KEY (series_code, obs_date),
     FOREIGN KEY (series_code) REFERENCES series_meta(series_code)
 );
@@ -79,6 +80,8 @@ CREATE TABLE IF NOT EXISTS fact_pricing (
     date_id   INTEGER NOT NULL,
     price_mid REAL,
     ytm_mid REAL,
+    z_spread REAL,
+    partial INTEGER DEFAULT 0,
     PRIMARY KEY (asset_id, date_id),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
@@ -103,7 +106,6 @@ CREATE TABLE IF NOT EXISTS fact_bdp (
     next_call_dt    DATE,
     next_call_yield REAL,
     next_call_price REAL,
-    z_spread        REAL,
     PRIMARY KEY (asset_id, date_id),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
     FOREIGN KEY (date_id) REFERENCES dim_date(date_id)
@@ -141,7 +143,7 @@ CREATE TABLE IF NOT EXISTS fact_trading_volume (
     asset_id  INTEGER NOT NULL,
     date_id   INTEGER NOT NULL,
     trading_volume_thousands REAL,
-    volume_partial INTEGER DEFAULT 0,
+    partial INTEGER DEFAULT 0,
     series_type TEXT NOT NULL,
     PRIMARY KEY (asset_id, date_id, series_type),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),

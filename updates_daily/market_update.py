@@ -68,9 +68,9 @@ def pegar_metadados(conn, source):
     return df
 
 def descobrir_data_inicial(conn, series_code, data_padrao=datetime.date(2019, 1, 1)):
-    """Retorna o dia seguinte ao último dado salvo."""
+    """Retorna o dia seguinte ao último dado consolidado (não parcial)."""
     cursor = conn.cursor()
-    cursor.execute("SELECT MAX(obs_date) FROM time_series WHERE series_code=?", (series_code,))
+    cursor.execute("SELECT MAX(obs_date) FROM time_series WHERE series_code=? AND partial=0", (series_code,))
     resultado = cursor.fetchone()[0]
 
     if resultado:
@@ -86,19 +86,15 @@ def pegar_ultimo_valor_conhecido(conn, series_code):
     return resultado[0] if resultado else None
 
 def salvar_no_banco(conn, registros, fonte):
-    """Executa o INSERT OR IGNORE no banco de dados."""
+    """Executa o INSERT OR REPLACE no banco de dados."""
     if registros:
-        logger.info(f"[{fonte}] Inserindo {len(registros)} novo(s) ponto(s) no banco...")
+        logger.info(f"[{fonte}] Inserindo/Atualizando {len(registros)} ponto(s) no banco...")
         cursor = conn.cursor()
         cursor.executemany(
-            "INSERT OR IGNORE INTO time_series (series_code, obs_date, value) VALUES (?,?,?)",
+            "INSERT OR REPLACE INTO time_series (series_code, obs_date, value, partial) VALUES (?,?,?,?)",
             registros
         )
         conn.commit()
-        # cursor.rowcount após executemany com INSERT OR IGNORE não é confiável em todos
-        # os drivers para refletir quantas linhas realmente foram inseridas (vs ignoradas
-        # por já existirem). Se precisar saber exatamente quantas foram novas de fato,
-        # dá pra comparar o total de linhas da tabela antes/depois do commit.
         logger.info(f"[{fonte}] Commit realizado com sucesso ({len(registros)} registro(s) enviados).")
     else:
         logger.info(f"[{fonte}] Nenhum dado novo para inserir — base já está atualizada.")
@@ -304,8 +300,8 @@ def main():
     conn = conectar_banco()
     try:
         data_hoje = datetime.date.today()
-        data_final = data_hoje - datetime.timedelta(days=1)  # D-1
-        logger.info(f"Data de referência para atualização (D-1): {data_final}")
+        data_final = data_hoje # D0
+        logger.info(f"Data de referência para atualização (D0): {data_final}")
 
         total_inseridos_bbg = 0
         total_inseridos_fred = 0
@@ -339,6 +335,8 @@ def main():
                                   for _, row in grupo.iterrows()}
                 data_inicial_grupo = min(datas_iniciais.values())
 
+                data_busca_bbg = data_inicial_grupo - datetime.timedelta(days=5)  # Buffer de 5 dias para garantir preenchimento de gaps
+
                 if data_inicial_grupo > data_final:
                     logger.info(f"[BBG - {campo_banco}] {len(grupo)} série(s) já atualizada(s) até {data_final}. "
                                 f"Nada a fazer.")
@@ -346,13 +344,13 @@ def main():
                     continue
 
                 logger.info(f"[BBG - {campo_banco}] Baixando {len(tickers)} ticker(s) de "
-                            f"{data_inicial_grupo} a {data_final}: {tickers}")
+                            f"{data_busca_bbg} a {data_final}: {tickers}")
 
                 try:
                     df_bbg = blp.bdh(
                         tickers=tickers,
                         flds=[fld_bloomberg],
-                        start_date=data_inicial_grupo.strftime('%Y-%m-%d'),
+                        start_date=data_busca_bbg.strftime('%Y-%m-%d'),
                         end_date=data_final.strftime('%Y-%m-%d'),
                         **kwargs_bloomberg
                     )
@@ -409,7 +407,9 @@ def main():
                             continue
 
                         if data_nativa >= data_corte_serie:
-                            novos_registros_bbg.append((series_code, data_nativa.strftime('%Y-%m-%d'), float(valor)))
+                            # Define a flag baseada na data da observação
+                            is_partial = 1 if data_nativa == data_hoje else 0
+                            novos_registros_bbg.append((series_code, data_nativa.strftime('%Y-%m-%d'), float(valor), is_partial))
                             pontos_inseridos_serie += 1
 
                     logger.info(f"[BBG - {series_code}] {pontos_inseridos_serie} ponto(s) novo(s) "
@@ -455,7 +455,16 @@ def main():
                         dados_preenchidos = preencher_gaps_calendario(dados_brutos, data_inicial, data_final, valor_anterior)
 
                         for iso, valor in dados_preenchidos:
-                            novos_registros_fred.append((series_code, iso, valor))
+                            # Converte ISO string para objeto Date para comparação e define a flag
+                            iso_date = datetime.datetime.strptime(iso, '%Y-%m-%d').date()
+                            is_partial = 1 if iso_date == data_hoje else 0
+                            
+                            novos_registros_fred.append((
+                                series_code, 
+                                iso, 
+                                float(valor), 
+                                is_partial
+                            ))
 
                         logger.info(f"[FRED - {series_code}] {len(dados_brutos)} ponto(s) recebido(s) no total "
                                     f"pela API (histórico completo), {len(dados_preenchidos)} ponto(s) novo(s) "
