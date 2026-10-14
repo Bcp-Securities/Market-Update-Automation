@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS dim_security (
     collateral TEXT,
     amt_issuance REAL,
     min_piece REAL,
+    issue_price REAL,
+    yield_at_issuance REAL,
     flag_inactive INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS dim_date (

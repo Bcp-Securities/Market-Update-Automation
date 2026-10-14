@@ -34,7 +34,7 @@ logger = logging.getLogger("atualizador_dim_security")
 def register_new_assets(tickers, db_path=DB_PATH):
     logger.info(f"Cadastrando {len(tickers)} novo(s) ativo(s)...")
 
-    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE', 'cntry_of_risk']
+    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE', 'cntry_of_risk', 'ISSUE_PX', 'YIELD_ON_ISSUE_DATE']
 
     try:
         logger.info(f"Buscando dados...")
@@ -69,7 +69,9 @@ def register_new_assets(tickers, db_path=DB_PATH):
             'PAYMENT_RANK': 'collateral',
             'AMT_ISSUED': 'amt_issuance',
             'MIN_PIECE': 'min_piece',
-            'cntry_of_risk': 'cntry_of_risk'
+            'cntry_of_risk': 'cntry_of_risk',
+            'ISSUE_PX': 'issue_price',
+            'YIELD_ON_ISSUE_DATE': 'yield_at_issuance'
         }, inplace=True)
 
         conn = sqlite3.connect(db_path)
@@ -77,9 +79,9 @@ def register_new_assets(tickers, db_path=DB_PATH):
 
         for _, row in df_bdp.iterrows():
             cursor.execute('''
-                INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece, cntry_of_risk)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (row['bbg_id'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group'], row['issuer'], row['isin'], row['currency'], row['collateral'], row['amt_issuance'], row['min_piece'], row['cntry_of_risk']))
+                INSERT OR IGNORE INTO dim_security (bbg_id, ticker, coupon, maturity, issue_date, industry_group, issuer, isin, currency, collateral, amt_issuance, min_piece, cntry_of_risk, issue_price, yield_at_issuance)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (row['bbg_id'], row['ticker'], row['coupon'], row['maturity'], row['issue_date'], row['industry_group'], row['issuer'], row['isin'], row['currency'], row['collateral'], row['amt_issuance'], row['min_piece'], row['cntry_of_risk'], row['issue_price'], row['yield_at_issuance']))
 
         conn.commit()
         logger.info("Ativos cadastrados com sucesso na dim_security.")

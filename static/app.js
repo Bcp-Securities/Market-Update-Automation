@@ -18,6 +18,8 @@ const LABELS = {
     collateral: 'Collateral',
     amt_issuance: 'Amount Issuance',
     min_piece: 'Min. Piece',
+    issue_price: 'Issue Price',
+    yield_at_issuance: 'Yield at Issuance',
     bbg_id_regs: 'BBG ID RegS',
     bbg_id_144a: 'BBG ID 144A',
 };

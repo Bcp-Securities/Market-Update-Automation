@@ -184,7 +184,7 @@ def bloomberg_consultar_ativo(bloomberg_id):
     if not bloomberg_id:
         return None
 
-    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE', 'cntry_of_risk']
+    campos_estaticos = ['TICKER', 'CPN', 'MATURITY', 'issue_dt', 'BICS_LEVEL_2_INDUSTRY_GROUP_NAME', 'ISSUER', 'ID_ISIN', 'CRNCY', 'PAYMENT_RANK', 'AMT_ISSUED', 'MIN_PIECE', 'cntry_of_risk', 'ISSUE_PX', 'YIELD_ON_ISSUE_DATE']
     
     try:
         df_bdp = blp.bdp([bloomberg_id], flds=campos_estaticos)
@@ -220,7 +220,9 @@ def bloomberg_consultar_ativo(bloomberg_id):
             'PAYMENT_RANK': 'collateral',
             'AMT_ISSUED': 'amt_issuance',
             'MIN_PIECE': 'min_piece',
-            'cntry_of_risk': 'cntry_of_risk'
+            'cntry_of_risk': 'cntry_of_risk',
+            'ISSUE_PX': 'issue_price',
+            'YIELD_ON_ISSUE_DATE': 'yield_at_issuance'
         }, inplace=True)
 
         def obter_valor(df, col):
@@ -242,6 +244,8 @@ def bloomberg_consultar_ativo(bloomberg_id):
             "collateral": obter_valor(df_bdp, 'collateral'),
             "amt_issuance": obter_valor(df_bdp, 'amt_issuance'),
             "min_piece": obter_valor(df_bdp, 'min_piece'),
+            "issue_price": obter_valor(df_bdp, 'issue_price'),
+            "yield_at_issuance": obter_valor(df_bdp, 'yield_at_issuance'),
         }
     except Exception as e:
         print(f"Erro ao consultar Bloomberg para ID {bloomberg_id}: {e}")
@@ -541,12 +545,6 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     if not isinstance(data_final, datetime) and not isinstance(data_final, date):
         data_final = datetime.strptime(data_final, "%Y-%m-%d").date()
 
-    lista_ativo_ids = lista_ativo_ids_orig.copy()  # Para não modificar a lista original
-    for idx, ativo_id in enumerate(lista_ativo_ids):
-        # Formata o ID adicionando @BVAL CORP se não existir
-        id_consulta_bbg = ativo_id if ativo_id.upper().endswith("@BVAL CORP") else f"{ativo_id}@BVAL CORP"
-        lista_ativo_ids[idx] = id_consulta_bbg
-
     hoje = datetime.now().date()
     datas = pd.date_range(start=data_inicial, end=data_final).to_pydatetime().tolist()
     conn = sqlite3.connect(DB_PATH)
@@ -554,54 +552,105 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     try:
         ids_map = garantir_dim_date_range(conn, datas)
         
-        # 1. Mapeia fatias e datas faltantes por ativo
-        grupos_fatias = {}
-        tickers_solicitados = set(lista_ativo_ids)
-        faltantes_por_ativo = {} # Para o filtro final
+        # 1. Mapeia datas faltantes INICIAIS por ativo (usando o ID original)
+        faltantes_por_ativo_inicial = {}
+        tickers_solicitados = set(lista_ativo_ids_orig)
         
-        for ativo_id in lista_ativo_ids:
+        for ativo_id in lista_ativo_ids_orig:
             existentes = obter_datas_existentes(conn, 'fact_pricing', ativo_id, data_inicial, data_final)
-            faltantes = sorted(set(pd.date_range(start=data_inicial, end=data_final).date) - existentes)
+            faltantes = set(pd.date_range(start=data_inicial, end=data_final).date) - existentes
 
             if faltantes:
-                faltantes_por_ativo[ativo_id] = set(faltantes)
-                fatias = tuple(calcular_fatias_faltantes(existentes, data_inicial, data_final))
-                grupos_fatias.setdefault(fatias, []).append(ativo_id)
+                faltantes_por_ativo_inicial[ativo_id] = faltantes
             else:
                 tickers_solicitados.discard(ativo_id)
 
-        # 2. Chama a Bloomberg por fatias
+        # Usado para acompanhar o que AINDA falta enquanto iteramos nas estratégias de fallback
+        faltantes_por_ativo_atual = {k: set(v) for k, v in faltantes_por_ativo_inicial.items()}
+        
         frames_bdh = []
-        for fatias, tickers_grupo in grupos_fatias.items():
-            for dt_ini, dt_fim in fatias:
-                df_slice = blp.bdh(
-                    tickers=tickers_grupo, flds=['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid'],
-                    start_date=dt_ini, end_date=dt_fim, Per='D'
-                )
-                if not df_slice.empty:
-                    frames_bdh.append(df_slice)
+        # Estratégias de busca na Bloomberg: 
+        # 1. Tenta BVAL 
+        # 2. Fallback sem sufixo
+        estrategias = ['BVAL', 'ORIGINAL'] 
+        
+        # 2. Chama a Bloomberg gerenciando o Fallback
+        for estrategia in estrategias:
+            if not faltantes_por_ativo_atual:
+                break  # Se não falta mais nada, interrompe o fallback
+                
+            grupos_fatias = {}
+            
+            # Recalcula as fatias baseadas APENAS no que ainda não foi retornado
+            for ativo_id, faltantes in faltantes_por_ativo_atual.items():
+                datas_totais = set(pd.date_range(start=data_inicial, end=data_final).date)
+                novos_existentes = datas_totais - faltantes
+                fatias = tuple(calcular_fatias_faltantes(novos_existentes, data_inicial, data_final))
+                grupos_fatias.setdefault(fatias, []).append(ativo_id)
+
+            for fatias, tickers_grupo in grupos_fatias.items():
+                query_to_base = {}
+                tickers_query = []
+                
+                # Constrói o ticker de busca dependendo da estratégia
+                for base_id in tickers_grupo:
+                    if estrategia == 'BVAL':
+                        query_id = base_id if base_id.upper().endswith("@BVAL CORP") else f"{base_id}@BVAL CORP"
+                    else:
+                        query_id = base_id  # Fallback: Tenta sem BVAL
+                        
+                    query_to_base[query_id] = base_id
+                    tickers_query.append(query_id)
+                
+                for dt_ini, dt_fim in fatias:
+                    df_slice = None
+                    try:
+                        df_slice = blp.bdh(
+                            tickers=tickers_query, flds=['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid'],
+                            start_date=dt_ini, end_date=dt_fim, Per='D'
+                        )
+                    except Exception as e:
+                        print(f"Aviso: Erro ao buscar {estrategia}: {e}")
+                    
+                    if df_slice is not None and not df_slice.empty:
+                        df_slice = df_slice.copy()
+                        
+                        # PADRONIZAÇÃO: Substitui o ticker buscado de volta pelo ID original 
+                        df_slice['ticker'] = df_slice['ticker'].map(query_to_base)
+                        frames_bdh.append(df_slice)
+                        
+                        # Descobre as datas que voltaram e tira da lista de 'faltantes'
+                        df_dates = df_slice[['ticker', 'date']].drop_duplicates()
+                        for tck, group in df_dates.groupby('ticker'):
+                            if tck in faltantes_por_ativo_atual:
+                                returned_dates = set(pd.to_datetime(group['date']).dt.date)
+                                faltantes_por_ativo_atual[tck] -= returned_dates
+            
+            # Remove chaves vazias para não tentar buscar na próxima rodada
+            faltantes_por_ativo_atual = {k: v for k, v in faltantes_por_ativo_atual.items() if v}
 
         if not frames_bdh:
             conn.close()
             detalhes = [
                 {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield já atualizados (nenhum dado novo necessário ou nenhum novo disponível)."}
-                for ativo_id in lista_ativo_ids
+                for ativo_id in lista_ativo_ids_orig
             ]
             return {"sucesso": True, "mensagem": "Nenhum dado novo precisou ser baixado (banco atualizado).", "detalhes": detalhes}
 
-        # 3. Concatena tudo
+        # 3. Concatena tudo (os dados com e sem BVAL, todos já mapeados pro ID original)
         df_bdh_raw = pd.concat(frames_bdh, ignore_index=True)
         
         # 4. Aplica o ffill na série inteira e preenche os gaps 
         df_bdh = bloomberg_fill_prev(df_bdh_raw)
 
         # 5. Remove as datas que já existiam no banco ("erradas" após o ffill)
+        # Atenção: Usamos faltantes_por_ativo_inicial para garantir integridade com o pedido original
         df_bdh['date_date'] = pd.to_datetime(df_bdh['date']).dt.date
         df_bdh['filter_key'] = df_bdh['ticker'] + "_" + df_bdh['date_date'].astype(str)
         
         valid_keys = set(
             f"{tck}_{dt}" 
-            for tck, faltantes in faltantes_por_ativo.items() 
+            for tck, faltantes in faltantes_por_ativo_inicial.items() 
             for dt in faltantes
         )
         df_bdh = df_bdh[df_bdh['filter_key'].isin(valid_keys)].drop(columns=['date_date', 'filter_key'])
@@ -624,7 +673,7 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
             'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
         }, inplace=True)
 
-        df_bdh['bbg_id'] = df_bdh['bbg_id'].str.split('@').str[0]  # Remove o sufixo @BVAL CORP para casar com dim_security
+        df_bdh['bbg_id'] = df_bdh['bbg_id'].str.split('@').str[0]
 
         df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
         df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
@@ -644,12 +693,13 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     except Exception as e:
         conn.rollback()
         print(f"Erro ao preencher preço e yield: {e}")
+        print(f"Erro ao preencher preço e yield: {type(e).__name__}")
         return {
             "sucesso": False,
             "mensagem": f"Erro ao preencher preço e yield: {e}",
             "detalhes": [
                 {"id": ativo_id, "status": "erro", "mensagem": str(e)}
-                for ativo_id in lista_ativo_ids
+                for ativo_id in lista_ativo_ids_orig
             ],
         }
     finally:
@@ -658,12 +708,12 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     detalhes = [
         {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield preenchidos."}
         if ativo_id not in tickers_faltantes else
-        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes de preço."}
-        for ativo_id in lista_ativo_ids
+        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes de preço mesmo após fallback (Sem BVAL)."}
+        for ativo_id in lista_ativo_ids_orig
     ]
     return {
         "sucesso": True,
-        "mensagem": f"Preço e Yield concluído para {len(lista_ativo_ids)} ativo(s).",
+        "mensagem": f"Preço e Yield concluído para {len(lista_ativo_ids_orig)} ativo(s).",
         "detalhes": detalhes,
     }
 
