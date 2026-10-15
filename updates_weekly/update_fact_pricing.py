@@ -120,50 +120,96 @@ def garantir_dim_date(conn, dt_obj):
 
 
 # ==========================================
-# BDH -> fact_pricing (preco/yield, serie temporal)
+# BDH -> fact_pricing (preco/yield/z_spread, serie temporal)
 # ==========================================
 
-def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0):
-    # Formata os tickers para a chamada e cria um dicionário para reverter depois
-    tickers_bbg = []
+FIELDS_PRICING = ['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid']
+
+
+def _buscar_pricing_bbg(tickers, reference_date, usar_bval):
+    """
+    Busca PX_MID / YLD_YTM_MID / z_sprd_mid na Bloomberg para uma única data.
+    Retorna DataFrame wide (uma linha por ticker) com o ticker ORIGINAL,
+    ou None se nada voltou.
+    """
     mapa_reverso = {}
     for t in tickers:
-        t_formatado = t if t.endswith("@BVAL CORP") else f"{t}@BVAL CORP"
-        tickers_bbg.append(t_formatado)
-        mapa_reverso[t_formatado] = t
+        if usar_bval:
+            query = t if t.upper().endswith("@BVAL CORP") else f"{t}@BVAL CORP"
+        else:
+            query = t
+        mapa_reverso[query] = t
 
-    logger.info(f"[BDH] Buscando PX_MID/YLD_YTM_MID/Z_SPREAD para {len(tickers_bbg)} ticker(s) em {reference_date}...")
+    try:
+        df = blp.bdh(
+            tickers=list(mapa_reverso.keys()),
+            flds=FIELDS_PRICING,
+            start_date=reference_date, end_date=reference_date,
+            Per='D', Fill='P'
+        )
+    except Exception as e:
+        logger.warning(f"[BDH] Erro ao buscar ({'BVAL' if usar_bval else 'ORIGINAL'}): {e}")
+        return None
 
-    df_bdh = blp.bdh(
-        tickers=tickers_bbg, # <-- Usa a lista formatada com @BVAL CORP
-        flds=['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid'],
-        start_date=reference_date, end_date=reference_date, Per='D', Fill='P'
-    )
+    if df is None or df.empty:
+        return None
 
-    if df_bdh.empty:
-        logger.warning("[BDH] Retorno vazio da Bloomberg. Nada a gravar em fact_pricing.")
+    df = df.copy()
+    if 'date' in df.columns:
+        df = df.drop(columns=['date'])
+    if 'field' in df.columns and 'value' in df.columns:
+        df = df.pivot(index='ticker', columns='field', values='value').reset_index()
+
+    # Volta para o ID original
+    df['ticker'] = df['ticker'].map(mapa_reverso).fillna(df['ticker'])
+
+    for col in FIELDS_PRICING:
+        if col not in df.columns:
+            df[col] = None
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # Ticker que veio só com NaN conta como "não retornou" (aciona o fallback)
+    df = df.dropna(subset=FIELDS_PRICING, how='all')
+
+    return df if not df.empty else None
+
+
+def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0):
+    tickers_solicitados = set(tickers)
+    pendentes = set(tickers)
+    frames = []
+
+    # 1. BVAL  2. Fallback sem sufixo
+    for estrategia, usar_bval in [('BVAL', True), ('ORIGINAL', False)]:
+        if not pendentes:
+            break
+
+        logger.info(
+            f"[BDH] ({estrategia}) Buscando PX_MID/YLD_YTM_MID/Z_SPREAD "
+            f"para {len(pendentes)} ticker(s) em {reference_date}..."
+        )
+
+        df_slice = _buscar_pricing_bbg(sorted(pendentes), reference_date, usar_bval)
+
+        if df_slice is None:
+            logger.warning(f"[BDH] ({estrategia}) Nenhum dado retornado.")
+            continue
+
+        # Garante que só entram tickers que ainda estavam pendentes
+        df_slice = df_slice[df_slice['ticker'].isin(pendentes)]
+        frames.append(df_slice)
+        pendentes -= set(df_slice['ticker'].unique())
+
+        logger.info(f"[BDH] ({estrategia}) Retornados: {len(df_slice)} | Ainda pendentes: {len(pendentes)}")
+
+    if not frames:
+        logger.warning("[BDH] Retorno vazio da Bloomberg (BVAL e ORIGINAL). Nada a gravar em fact_pricing.")
         return 0
 
-    if 'date' in df_bdh.columns:
-        df_bdh = df_bdh.drop(columns=['date'])
-    if 'field' in df_bdh.columns and 'value' in df_bdh.columns:
-        df_bdh = df_bdh.pivot(index='ticker', columns='field', values='value').reset_index()
+    df_bdh = pd.concat(frames, ignore_index=True)
 
-    # Reverte a coluna 'ticker' para o formato original antes de prosseguir
-    if 'ticker' in df_bdh.columns:
-        df_bdh['ticker'] = df_bdh['ticker'].map(mapa_reverso).fillna(df_bdh['ticker'])
-
-    for col in ['PX_MID', 'YLD_YTM_MID', 'z_sprd_mid']:
-        if col not in df_bdh.columns:
-            df_bdh[col] = None
-        df_bdh[col] = pd.to_numeric(df_bdh[col], errors='coerce')
-
-    tickers_solicitados = set(tickers)
     tickers_retornados = set(df_bdh['ticker'].unique())
-
-    tickers_faltantes = sorted(
-        tickers_solicitados - tickers_retornados
-    )
+    tickers_faltantes = sorted(tickers_solicitados - tickers_retornados)
 
     logger.info(
         f"[BDH] Solicitados: {len(tickers_solicitados)} | "
@@ -173,15 +219,15 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0)
 
     if tickers_faltantes:
         logger.warning(
-            f"[BDH] {len(tickers_faltantes)} ticker(s) não retornaram da Bloomberg:"
+            f"[BDH] {len(tickers_faltantes)} ticker(s) não retornaram da Bloomberg "
+            f"mesmo após fallback (sem BVAL):"
         )
-
         for ticker in tickers_faltantes:
             logger.warning(f"    {ticker}")
 
-
     df_bdh.rename(columns={
-        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid', 'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
+        'PX_MID': 'price_mid', 'YLD_YTM_MID': 'ytm_mid',
+        'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
     }, inplace=True)
 
     df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
