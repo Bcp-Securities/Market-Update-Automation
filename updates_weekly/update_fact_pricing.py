@@ -173,6 +173,43 @@ def _buscar_pricing_bbg(tickers, reference_date, usar_bval):
 
     return df if not df.empty else None
 
+def buscar_bb_composite(tickers, data_referencia):
+    """
+    Busca o rating BB_COMPOSITE dos ativos para uma data específica.
+
+    Retorna um DataFrame com:
+        ticker, bb_composite
+    """
+    if not tickers:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    data_override = pd.Timestamp(data_referencia).strftime("%Y%m%d")
+
+    df_rating = blp.bdp(
+        tickers=tickers,
+        flds=["BB_COMPOSITE"],
+        RATING_AS_OF_DATE_OVERRIDE=data_override
+    )
+
+    if df_rating is None or df_rating.empty:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    df_rating = df_rating.reset_index()
+
+    # O retorno pode ter ticker/field como colunas ou no índice.
+    df_rating = df_rating.rename(columns={
+        "value": "bb_composite"
+    })
+
+    if "ticker" not in df_rating.columns:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    if "bb_composite" not in df_rating.columns:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    return df_rating[["ticker", "bb_composite"]].drop_duplicates(
+        subset=["ticker"]
+    )
 
 def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0):
     tickers_solicitados = set(tickers)
@@ -230,6 +267,53 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0)
         'ticker': 'bbg_id', 'z_sprd_mid': 'z_spread'
     }, inplace=True)
 
+    # Busca o BB_COMPOSITE para a data de referência
+    df_bdh['bb_composite'] = None
+
+    try:
+        tickers_rating = df_bdh['bbg_id'].dropna().unique().tolist()
+
+        logger.info(
+            f"[BDP] Buscando BB_COMPOSITE para "
+            f"{len(tickers_rating)} ticker(s) em {reference_date}..."
+        )
+
+        df_rating = buscar_bb_composite(
+            tickers=tickers_rating,
+            data_referencia=reference_date
+        )
+
+        if df_rating is not None and not df_rating.empty:
+            # Normaliza os tickers retornados pela consulta de rating
+            df_rating['ticker'] = (
+                df_rating['ticker'].str.split('@').str[0]
+            )
+
+            rating_map = (
+                df_rating
+                .drop_duplicates(subset=['ticker'])
+                .set_index('ticker')['bb_composite']
+            )
+
+            df_bdh['bb_composite'] = (
+                df_bdh['bbg_id'].map(rating_map)
+            )
+
+            logger.info(
+                f"[BDP] Ratings retornados: "
+                f"{df_rating['bb_composite'].notna().sum()}"
+            )
+        else:
+            logger.warning(
+                f"[BDP] Nenhum BB_COMPOSITE retornado para {reference_date}."
+            )
+
+    except Exception as e:
+        # A falha do rating não impede a gravação de preço e yield
+        logger.exception(
+            f"[BDP] Erro ao buscar BB_COMPOSITE em {reference_date}: {e}"
+        )
+
     df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
     df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
     df_fact['date_id'] = date_id
@@ -239,13 +323,13 @@ def atualizar_fact_pricing(conn, tickers, reference_date, date_id, is_partial=0)
     if n_sem_match > 0:
         logger.warning(f"[BDH] {n_sem_match} ticker(s) retornado(s) pela Bloomberg nao encontrados em dim_security.")
 
-    cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'partial']
+    cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'bb_composite', 'partial']
     df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
 
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, partial)
-        SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, partial FROM fact_pricing_temp
+        INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, bb_composite, partial)
+        SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, bb_composite, partial FROM fact_pricing_temp
     ''')
     cursor.execute('DROP TABLE fact_pricing_temp')
     conn.commit()

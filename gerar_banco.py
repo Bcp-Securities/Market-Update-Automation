@@ -72,17 +72,14 @@ CREATE TABLE IF NOT EXISTS time_series_monthly (
 );
 CREATE INDEX IF NOT EXISTS ix_ts_monthly_date ON time_series_monthly(obs_date);
 
--- Dados de BDH (série temporal real: preço/yield NAQUELA data). Hoje
--- alimentada semanalmente (fechamento de segunda-feira), mas o formato já
--- comporta preenchimento sob demanda de qualquer data no futuro, sem gerar
--- nulos estruturais, pois carrega só os campos que fazem sentido como série
--- temporal continua.
+-- Dados de BDH (série temporal, dados em uma data por linha).
 CREATE TABLE IF NOT EXISTS fact_pricing (
     asset_id  INTEGER NOT NULL,
     date_id   INTEGER NOT NULL,
     price_mid REAL,
     ytm_mid REAL,
     z_spread REAL,
+    bb_composite TEXT,
     partial INTEGER DEFAULT 0,
     PRIMARY KEY (asset_id, date_id),
     FOREIGN KEY (asset_id) REFERENCES dim_security(asset_id),
@@ -104,7 +101,6 @@ CREATE TABLE IF NOT EXISTS fact_bdp (
     rating_moody    TEXT,
     rating_sp       TEXT,
     rating_fitch    TEXT,
-    bb_composite    TEXT,
     next_call_dt    DATE,
     next_call_yield REAL,
     next_call_price REAL,

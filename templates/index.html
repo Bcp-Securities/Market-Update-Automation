@@ -130,7 +130,7 @@
             <!-- Sub-abas internas: cada uma representa um tipo de preenchimento em lote -->
             <nav class="subtab-bar" role="tablist">
                 <button class="subtab-btn is-active" data-subtab="todos" role="tab">Todos</button>
-                <button class="subtab-btn" data-subtab="tipo1" role="tab">Preço e Yield</button>
+                <button class="subtab-btn" data-subtab="tipo1" role="tab">Pricing</button>
                 <button class="subtab-btn" data-subtab="tipo2" role="tab">Holders</button>
                 <button class="subtab-btn" data-subtab="tipo3" role="tab">Volume</button>
                 <button class="subtab-btn" data-subtab="bdp" role="tab">Dados BDP</button>
@@ -142,6 +142,27 @@
                     <div class="card form-card">
 
                         <div class="field-group">
+                            <div class="toggle-row">
+                                <div>
+                                    <label for="todos-ativos-todos">
+                                        Usar todos os ativos cadastrados
+                                    </label>
+                                    <p class="field-hint">
+                                        Ignora a seleção individual e utiliza todos os ativos do banco.
+                                    </p>
+                                </div>
+
+                                <label class="switch">
+                                    <input
+                                        type="checkbox"
+                                        id="todos-ativos-todos"
+                                        class="toggle-todos-ativos"
+                                        data-lote-tipo="todos"
+                                    >
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
                             <label class="field-label" for="select-lote-todos">Ativos</label>
                             <select id="select-lote-todos" multiple></select>
                             <p class="field-hint">
@@ -154,7 +175,7 @@
                             <div class="check-group" id="todos-tipos">
                                 <label class="check-chip">
                                     <input type="checkbox" value="tipo1" checked>
-                                    <span>Preço e Yield</span>
+                                    <span>Pricing</span>
                                 </label>
                                 <label class="check-chip">
                                     <input type="checkbox" value="tipo2" checked>
@@ -170,7 +191,7 @@
                                 </label>
                             </div>
                             <p class="field-hint">
-                                O período abaixo só é usado por Preço e Yield e Volume; nos demais tipos é ignorado.
+                                O período abaixo só é usado por Pricing e Volume; nos demais tipos é ignorado.
                             </p>
                         </div>
 
@@ -204,12 +225,33 @@
                 </div>
             </div>
 
-            <!-- ---------- Sub-aba: Tipo 1 - Preço e Yield---------- -->
+            <!-- ---------- Sub-aba: Tipo 1 - Pricing ---------- -->
             <div class="subtab-panel" id="subpanel-tipo1" data-lote-tipo="tipo1">
                 <div class="panel-grid panel-grid-single">
                     <div class="card form-card">
 
                         <div class="field-group">
+                            <div class="toggle-row">
+                                <div>
+                                    <label for="todos-ativos-tipo1">
+                                        Usar todos os ativos cadastrados
+                                    </label>
+                                    <p class="field-hint">
+                                        Ignora a seleção individual e utiliza todos os ativos do banco.
+                                    </p>
+                                </div>
+
+                                <label class="switch">
+                                    <input
+                                        type="checkbox"
+                                        id="todos-ativos-tipo1"
+                                        class="toggle-todos-ativos"
+                                        data-lote-tipo="tipo1"
+                                    >
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
                             <label class="field-label" for="select-lote-tipo1">Ativos</label>
                             <select id="select-lote-tipo1" multiple></select>
                             <p class="field-hint">Selecione um ou mais ativos para processar.</p>
@@ -251,6 +293,27 @@
                     <div class="card form-card">
 
                         <div class="field-group">
+                            <div class="toggle-row">
+                                <div>
+                                    <label for="todos-ativos-tipo2">
+                                        Usar todos os ativos cadastrados
+                                    </label>
+                                    <p class="field-hint">
+                                        Ignora a seleção individual e utiliza todos os ativos do banco.
+                                    </p>
+                                </div>
+
+                                <label class="switch">
+                                    <input
+                                        type="checkbox"
+                                        id="todos-ativos-tipo2"
+                                        class="toggle-todos-ativos"
+                                        data-lote-tipo="tipo2"
+                                    >
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
                             <label class="field-label" for="select-lote-tipo2">Ativos</label>
                             <select id="select-lote-tipo2" multiple></select>
                             <p class="field-hint">
@@ -284,6 +347,27 @@
                     <div class="card form-card">
 
                         <div class="field-group">
+                            <div class="toggle-row">
+                                <div>
+                                    <label for="todos-ativos-tipo3">
+                                        Usar todos os ativos cadastrados
+                                    </label>
+                                    <p class="field-hint">
+                                        Ignora a seleção individual e utiliza todos os ativos do banco.
+                                    </p>
+                                </div>
+
+                                <label class="switch">
+                                    <input
+                                        type="checkbox"
+                                        id="todos-ativos-tipo3"
+                                        class="toggle-todos-ativos"
+                                        data-lote-tipo="tipo3"
+                                    >
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
                             <label class="field-label" for="select-lote-tipo3">Ativos</label>
                             <select id="select-lote-tipo3" multiple></select>
                             <p class="field-hint">
@@ -328,6 +412,27 @@
                     <div class="card form-card">
 
                         <div class="field-group">
+                            <div class="toggle-row">
+                                <div>
+                                    <label for="todos-ativos-bdp">
+                                        Usar todos os ativos cadastrados
+                                    </label>
+                                    <p class="field-hint">
+                                        Ignora a seleção individual e utiliza todos os ativos do banco.
+                                    </p>
+                                </div>
+
+                                <label class="switch">
+                                    <input
+                                        type="checkbox"
+                                        id="todos-ativos-bdp"
+                                        class="toggle-todos-ativos"
+                                        data-lote-tipo="bdp"
+                                    >
+                                    <span class="switch-slider"></span>
+                                </label>
+                            </div>
+
                             <label class="field-label" for="select-lote-bdp">Ativos</label>
                             <select id="select-lote-bdp" multiple></select>
                             <p class="field-hint">

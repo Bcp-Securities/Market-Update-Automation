@@ -322,6 +322,15 @@ def db_listar_ativos_resumo():
     
     return resumo
 
+def db_listar_ids_ativos():
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cursor = conn.execute(
+            "SELECT bbg_id FROM dim_security WHERE bbg_id IS NOT NULL"
+        )
+        return [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
 
 def db_obter_schema_ativo():
     """
@@ -523,6 +532,44 @@ def calcular_fatias_faltantes(datas_existentes, data_inicial, data_final):
     fatias.append((inicio, anterior))
     return fatias
 
+def buscar_bb_composite(tickers, data_referencia):
+    """
+    Busca o rating BB_COMPOSITE dos ativos para uma data específica.
+
+    Retorna um DataFrame com:
+        ticker, bb_composite
+    """
+    if not tickers:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    data_override = pd.Timestamp(data_referencia).strftime("%Y%m%d")
+
+    df_rating = blp.bdp(
+        tickers=tickers,
+        flds=["BB_COMPOSITE"],
+        RATING_AS_OF_DATE_OVERRIDE=data_override
+    )
+
+    if df_rating is None or df_rating.empty:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    df_rating = df_rating.reset_index()
+
+    # O retorno pode ter ticker/field como colunas ou no índice.
+    df_rating = df_rating.rename(columns={
+        "value": "bb_composite"
+    })
+
+    if "ticker" not in df_rating.columns:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    if "bb_composite" not in df_rating.columns:
+        return pd.DataFrame(columns=["ticker", "bb_composite"])
+
+    return df_rating[["ticker", "bb_composite"]].drop_duplicates(
+        subset=["ticker"]
+    )
+
 def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     """
     Preenchimento em lote — Tipo 1 (Preço e Yield). Assim como no Tipo 3, partial representa dados do dia atual, 1 para hoje e 0 caso constrário.
@@ -675,18 +722,67 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
 
         df_bdh['bbg_id'] = df_bdh['bbg_id'].str.split('@').str[0]
 
-        df_assets = pd.read_sql("SELECT asset_id, bbg_id FROM dim_security", conn)
-        df_fact = df_bdh.merge(df_assets, on='bbg_id', how='inner')
-        df_fact['date_id'] = df_fact['date'].apply(lambda x: ids_map[x.strftime("%Y-%m-%d")])
-        df_fact['partial'] = (df_fact['date'].dt.date == hoje).astype(int)
+        # Busca o rating para cada data presente no DataFrame
+        df_bdh["bb_composite"] = None
+
+        for data_ref, indices in df_bdh.groupby(
+            df_bdh["date"].dt.date
+        ).groups.items():
+
+            tickers_data = df_bdh.loc[indices, "bbg_id"].dropna().unique().tolist()
+
+            try:
+                df_rating = buscar_bb_composite(
+                    tickers=tickers_data,
+                    data_referencia=data_ref
+                )
+
+                if not df_rating.empty:
+                    df_rating["ticker"] = (
+                        df_rating["ticker"].str.split("@").str[0]
+                    )
+
+                    rating_map = df_rating.set_index(
+                        "ticker"
+                    )["bb_composite"]
+
+                    df_bdh.loc[indices, "bb_composite"] = (
+                        df_bdh.loc[indices, "bbg_id"].map(rating_map)
+                    )
+
+            except Exception as e:
+                print(
+                    f"Aviso: erro ao buscar BB_COMPOSITE "
+                    f"para {data_ref}: {e}"
+                )
+
+        # Associa aos IDs internos do banco
+        df_assets = pd.read_sql(
+            "SELECT asset_id, bbg_id FROM dim_security",
+            conn
+        )
+
+        df_fact = df_bdh.merge(
+            df_assets,
+            on="bbg_id",
+            how="inner"
+        )
+
+        df_fact["date_id"] = df_fact["date"].apply(
+            lambda x: ids_map[x.strftime("%Y-%m-%d")]
+        )
+
+        df_fact["partial"] = (
+            df_fact["date"].dt.date == hoje
+        ).astype(int)
         
-        cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'partial']
+        cols = ['asset_id', 'date_id', 'price_mid', 'ytm_mid', 'z_spread', 'bb_composite', 'partial']
         df_fact[cols].to_sql('fact_pricing_temp', conn, if_exists='replace', index=False)
 
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, partial)
-            SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, partial FROM fact_pricing_temp
+            INSERT OR REPLACE INTO fact_pricing (asset_id, date_id, price_mid, ytm_mid, z_spread, bb_composite, partial)
+            SELECT asset_id, date_id, price_mid, ytm_mid, z_spread, bb_composite, partial FROM fact_pricing_temp
         ''')
         cursor.execute('DROP TABLE fact_pricing_temp')
         conn.commit()
@@ -708,7 +804,7 @@ def preencher_tipo1(lista_ativo_ids_orig, data_inicial, data_final):
     detalhes = [
         {"id": ativo_id, "status": "ok", "mensagem": "Preço e Yield preenchidos."}
         if ativo_id not in tickers_faltantes else
-        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes de preço mesmo após fallback (Sem BVAL)."}
+        {"id": ativo_id, "status": "erro", "mensagem": "Dados faltantes de preço."}
         for ativo_id in lista_ativo_ids_orig
     ]
     return {
@@ -1455,13 +1551,20 @@ def api_atualizar_ativo():
 def api_preencher_lote():
     payload = request.get_json(silent=True) or {}
     tipo = payload.get('tipo_preenchimento') or 'tipo1'
+    todos_ativos = bool(payload.get('todos_ativos', False))
     ids = payload.get('ativo_ids') or []
+
+    if todos_ativos:
+        ids = db_listar_ids_ativos()
+
+    if not ids:
+        return jsonify({
+            "sucesso": False,
+            "mensagem": "Não há ativos para processar."
+        }), 400
     data_inicial = payload.get('data_inicial')
     data_final = payload.get('data_final')
     holders_confirmado = bool(payload.get('holders_confirmado'))
-
-    if not ids:
-        return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um ativo."}), 400
 
     # Descobre quais tipos serão de fato executados
     if tipo == 'todos':
@@ -1497,10 +1600,23 @@ def api_preencher_lote():
 @app.route('/api/holders/verificar', methods=['POST'])
 def api_holders_verificar():
     payload = request.get_json(silent=True) or {}
+
+    todos_ativos = payload.get('todos_ativos') is True
     ids = payload.get('ativo_ids') or []
+
+    if todos_ativos:
+        ids = db_listar_ids_ativos()
+
     if not ids:
-        return jsonify({"sucesso": False, "mensagem": "Selecione ao menos um ativo."}), 400
-    return jsonify({"sucesso": True, **holders_avaliar_ids(ids)})
+        return jsonify({
+            "sucesso": False,
+            "mensagem": "Não há ativos para verificar."
+        }), 400
+
+    return jsonify({
+        "sucesso": True,
+        **holders_avaliar_ids(ids)
+    })
 
 
 @app.route('/api/holders/salvar-ids', methods=['POST'])

@@ -811,3 +811,71 @@ input[type="date"]::-webkit-datetime-edit-year-field:focus {
         flex-direction: column;
     }
 }
+
+/* ---------------------------- Toggle Row ---------------------------- */
+
+.toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.toggle-row > div {
+    flex: 1;
+}
+
+.switch {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 46px;
+    height: 26px;
+    cursor: pointer;
+}
+
+.switch input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch-slider {
+    position: absolute;
+    inset: 0;
+    border-radius: 999px;
+    background: #a0a0a0;
+    transition: background 0.2s ease;
+}
+
+.switch-slider::before {
+    content: "";
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    left: 3px;
+    top: 3px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.2s ease;
+}
+
+.switch input:checked + .switch-slider {
+    background: #16845b;
+}
+
+.switch input:checked + .switch-slider::before {
+    transform: translateX(20px);
+}
+
+.switch input:focus-visible + .switch-slider {
+    outline: 2px solid #16845b;
+    outline-offset: 3px;
+}
+
+.choices.is-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}

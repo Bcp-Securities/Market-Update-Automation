@@ -507,6 +507,33 @@ function initAbaLote(listaAtivos) {
             resultado.before(painelHolders);
         }
 
+        const toggleTodos = document.querySelector(
+            `.toggle-todos-ativos[data-lote-tipo="${tipo}"]`
+        );
+
+        function atualizarModoSelecao() {
+            if (!toggleTodos) return;
+
+            const usarTodos = toggleTodos.checked;
+
+            // Desabilita a seleção manual quando "todos" estiver ligado.
+            selectEl.closest('.choices').classList.toggle(
+                'is-disabled',
+                usarTodos
+            );
+
+            selectEl.disabled = usarTodos;
+
+            if (usarTodos) {
+                choices.removeActiveItems();
+            }
+        }
+
+        if (toggleTodos) {
+            toggleTodos.addEventListener('change', atualizarModoSelecao);
+            atualizarModoSelecao();
+        }
+
         // ---------------- Quais tipos esta sub-aba vai rodar ----------------
 
         function obterTiposEfetivos() {
@@ -545,6 +572,7 @@ function initAbaLote(listaAtivos) {
         }
 
         async function executar(rodada, holdersConfirmado) {
+            const usarTodos = toggleTodos?.checked ?? false;
             resultado.hidden = true;
             setFieldHint(feedback, '');
 
@@ -553,7 +581,8 @@ function initAbaLote(listaAtivos) {
                 body: JSON.stringify({
                     tipo_preenchimento: tipo,
                     subtipos: tipo === 'todos' ? rodada.tipos : undefined,
-                    ativo_ids: rodada.selecionados,
+                    todos_ativos: usarTodos,
+                    ativo_ids: usarTodos ? [] : rodada.selecionados,
                     data_inicial: rodada.dataInicial,
                     data_final: rodada.dataFinal,
                     holders_confirmado: holdersConfirmado,
@@ -586,9 +615,14 @@ function initAbaLote(listaAtivos) {
                 return executar(rodada, false);
             }
 
+            const usarTodos = toggleTodos?.checked ?? false;
+
             const avaliacao = await apiRequest('/api/holders/verificar', {
                 method: 'POST',
-                body: JSON.stringify({ ativo_ids: rodada.selecionados }),
+                body: JSON.stringify({
+                    todos_ativos: usarTodos,
+                    ativo_ids: usarTodos ? [] : rodada.selecionados
+                }),
             });
 
             if (avaliacao.status === 'ok') {
@@ -685,6 +719,7 @@ function initAbaLote(listaAtivos) {
         // ---------------- Clique em "Processar" ----------------
 
         btnProcessar.addEventListener('click', () => {
+            const usarTodos = toggleTodos?.checked ?? false;
             const tipos = obterTiposEfetivos();
             const selecionados = choices.getValue(true);
             const usaData = precisaData(tipos);
@@ -697,7 +732,7 @@ function initAbaLote(listaAtivos) {
                 setFieldHint(feedback, 'Selecione ao menos um tipo de preenchimento.', 'error');
                 return;
             }
-            if (!selecionados.length) {
+            if (!selecionados.length && usarTodos === false) {
                 setFieldHint(feedback, 'Selecione ao menos um ativo.', 'error');
                 return;
             }
